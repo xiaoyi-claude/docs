@@ -1,0 +1,199 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<company_test_data generated_at="2026-05-15T14:30:00" total_count="30">
+  <normal_companies count="12">
+    <company>
+      <ent_code>550e8400-e29b-41d4-a716-446655440001</ent_code>
+      <credit_code>91350200MA348KJW1K</credit_code>
+      <name>福建华为技术有限公司</name>
+      <legal_rep>任正非</legal_rep>
+      <address>福建省厦门市思明区软件园二期</address>
+    </company>
+    <company>
+      <ent_code>550e8400-e29b-41d4-a716-446655440002</ent_code>
+      <credit_code>91310000MA1FB4HC1Q</credit_code>
+      <name>上海阿里巴巴信息技术有限公司</name>
+      <legal_rep>张勇</legal_rep>
+      <address>上海市浦东新区张江高科技园区</address>
+    </company>
+    <company>
+      <ent_code>550e8400-e29b-41d4-a716-446655440003</ent_code>
+      <credit_code>91440300MA5DRT3D9M</credit_code>
+      <name>深圳腾讯计算机系统有限公司</name>
+      <legal_rep>马化腾</legal_rep>
+      <address>广东省深圳市南山区科技园</address>
+    </company>
+    <company>
+      <ent_code>550e8400-e29b-41d4-a716-446655440004</ent_code>
+      <credit_code>91330100MA27WXK87E</credit_code>
+      <name>杭州网易网络有限公司</name>
+      <legal_rep>丁磊</legal_rep>
+      <address>浙江省杭州市滨江区网易大厦</address>
+    </company>
+    <company>
+      <ent_code>550e8400-e29b-41d4-a716-446655440005</ent_code>
+      <credit_code>91110000MA008T4Y8L</credit_code>
+      <name>北京百度网讯科技有限公司</name>
+      <legal_rep>李彦宏</legal_rep>
+      <address>北京市海淀区中关村软件园</address>
+    </company>
+    <company>
+      <ent_code>550e8400-e29b-41d4-a716-446655440006</ent_code>
+      <credit_code>91320100MA1N0T5C2P</credit_code>
+      <name>南京苏宁易购电子商务有限公司</name>
+      <legal_rep>张近东</legal_rep>
+      <address>江苏省南京市玄武区苏宁大道</address>
+    </company>
+    <company>
+      <ent_code>550e8400-e29b-41d4-a716-446655440007</ent_code>
+      <credit_code>91420100MA4K0X5D7Q</credit_code>
+      <name>武汉小米科技有限公司</name>
+      <legal_rep>雷军</legal_rep>
+      <address>湖北省武汉市东湖新技术开发区</address>
+    </company>
+    <company>
+      <ent_code>550e8400-e29b-41d4-a716-446655440008</ent_code>
+      <credit_code>91440100MA3CJC3E6H</credit_code>
+      <name>广州字节跳动网络技术有限公司</name>
+      <legal_rep>张一鸣</legal_rep>
+      <address>广东省广州市天河区珠江新城</address>
+    </company>
+    <company>
+      <ent_code>550e8400-e29b-41d4-a716-446655440009</ent_code>
+      <credit_code>91500000MA5U6K8E2F</credit_code>
+      <name>重庆京东世纪贸易有限公司</name>
+      <legal_rep>刘强东</legal_rep>
+      <address>重庆市渝北区两江新区</address>
+    </company>
+    <company>
+      <ent_code>550e8400-e29b-41d4-a716-446655440010</ent_code>
+      <credit_code>91510100MA61R8T7XQ</credit_code>
+      <name>成都美团点评信息技术有限公司</name>
+      <legal_rep>王兴</legal_rep>
+      <address>四川省成都市高新区天府大道</address>
+    </company>
+    <company>
+      <ent_code>550e8400-e29b-41d4-a716-446655440011</ent_code>
+      <credit_code>91350500MA2YXTK38K</credit_code>
+      <name>泉州安踏体育用品有限公司</name>
+      <legal_rep>丁世忠</legal_rep>
+      <address>福建省泉州市晋江市安踏工业园</address>
+    </company>
+    <company>
+      <ent_code>550e8400-e29b-41d4-a716-446655440012</ent_code>
+      <credit_code>91330200MA293KDE7Q</credit_code>
+      <name>宁波雅戈尔集团股份有限公司</name>
+      <legal_rep>李如成</legal_rep>
+      <address>浙江省宁波市鄞州区雅戈尔大道</address>
+    </company>
+  </normal_companies>
+  <abnormal_companies count="18">
+    <company scene="missing_credit_code">
+      <credit_code></credit_code>
+      <name>测试缺失信用代码公司</name>
+      <legal_rep>张三</legal_rep>
+      <address>北京市朝阳区</address>
+    </company>
+    <company scene="missing_name">
+      <credit_code>91350200MA348KJW1K</credit_code>
+      <name></name>
+      <legal_rep>李四</legal_rep>
+      <address>上海市浦东新区</address>
+    </company>
+    <company scene="missing_legal_rep">
+      <credit_code>91310000MA1FB4HC1Q</credit_code>
+      <name>测试缺失法定代表人公司</name>
+      <legal_rep></legal_rep>
+      <address>广东省深圳市</address>
+    </company>
+    <company scene="missing_address">
+      <credit_code>91350200MA348KJW1K</credit_code>
+      <name>测试缺失地址公司</name>
+      <legal_rep>王五</legal_rep>
+      <address></address>
+    </company>
+    <company scene="invalid_credit_code_prefix">
+      <credit_code>88350200MA348KJW1K</credit_code>
+      <name>测试信用代码前缀错误公司</name>
+      <legal_rep>赵六</legal_rep>
+      <address>杭州市西湖区</address>
+    </company>
+    <company scene="invalid_credit_code_length">
+      <credit_code>91350200MA</credit_code>
+      <name>测试信用代码长度错误公司</name>
+      <legal_rep>孙七</legal_rep>
+      <address>南京市鼓楼区</address>
+    </company>
+    <company scene="invalid_name_english">
+      <credit_code>91350200MA348KJW1K</credit_code>
+      <name>ABC公司</name>
+      <legal_rep>周八</legal_rep>
+      <address>武汉市洪山区</address>
+    </company>
+    <company scene="invalid_name_too_short">
+      <credit_code>91310000MA1FB4HC1Q</credit_code>
+      <name>科技</name>
+      <legal_rep>吴九</legal_rep>
+      <address>广州市天河区</address>
+    </company>
+    <company scene="invalid_name_too_long">
+      <credit_code>91440300MA5DRT3D9M</credit_code>
+      <name>这是一个企业名称长度超过二十六个字符的超长名称测试公司</name>
+      <legal_rep>郑十</legal_rep>
+      <address>成都市武侯区</address>
+    </company>
+    <company scene="invalid_name_all_parentheses">
+      <credit_code>91330100MA27WXK87E</credit_code>
+      <name>（全括号测试）</name>
+      <legal_rep>冯十一</legal_rep>
+      <address>重庆市渝中区</address>
+    </company>
+    <company scene="invalid_name_pinyin">
+      <credit_code>91110000MA008T4Y8L</credit_code>
+      <name>ZhangSan</name>
+      <legal_rep>陈十二</legal_rep>
+      <address>西安市雁塔区</address>
+    </company>
+    <company scene="invalid_legal_rep_too_short">
+      <credit_code>91320100MA1N0T5C2P</credit_code>
+      <name>测试法定代表人过短公司</name>
+      <legal_rep>A</legal_rep>
+      <address>苏州市工业园区</address>
+    </company>
+    <company scene="invalid_legal_rep_too_long">
+      <credit_code>91420100MA4K0X5D7Q</credit_code>
+      <name>测试法定代表人过长公司</name>
+      <legal_rep>一二三四五六七</legal_rep>
+      <address>青岛市崂山区</address>
+    </company>
+    <company scene="invalid_legal_rep_not_chinese">
+      <credit_code>91440100MA3CJC3E6H</credit_code>
+      <name>测试法定代表人非汉字公司</name>
+      <legal_rep>LiMing</legal_rep>
+      <address>天津市南开区</address>
+    </company>
+    <company scene="same_name_different_company_1">
+      <credit_code>91350200MA348KJW1K</credit_code>
+      <name>同名不同企测试公司</name>
+      <legal_rep>黄十五</legal_rep>
+      <address>长沙市岳麓区</address>
+    </company>
+    <company scene="same_name_different_company_2">
+      <credit_code>91310000MA1FB4HC2Q</credit_code>
+      <name>同名不同企测试公司</name>
+      <legal_rep>杨十六</legal_rep>
+      <address>郑州市金水区</address>
+    </company>
+    <company scene="same_company_different_name_1">
+      <credit_code>91440300MA5DRT3D9M</credit_code>
+      <name>同企不同名测试公司（旧名）</name>
+      <legal_rep>朱十七</legal_rep>
+      <address>合肥市蜀山区</address>
+    </company>
+    <company scene="same_company_different_name_2">
+      <credit_code>91440300MA5DRT3D9M</credit_code>
+      <name>同企不同名测试公司（新名）</name>
+      <legal_rep>朱十七</legal_rep>
+      <address>合肥市蜀山区</address>
+    </company>
+  </abnormal_companies>
+</company_test_data>
