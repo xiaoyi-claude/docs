@@ -1,8 +1,8 @@
 # 企业名称服务架构设计规格说明
 
-> 版本：v1.1
-> 日期：2026-05-12
-> 需求来源：doc/企业名称/ 目录下全部原始文档 + 企业名称服务需求分析报告.md
+> 版本：v1.2
+> 日期：2026-05-18
+> 需求来源：doc/企业名称/ 目录下全部原始文档 + 企业名称服务需求分析报告.md + company_schema.sql(v2.0) + company-task设计(v1.1)
 
 ---
 
@@ -176,83 +176,67 @@ Step 6  写入 eiker-address-db
 |------|------|------|
 | `ent_code` | VARCHAR(36) | 企业 UUID v4（对外标识，公域使用） |
 | `credit_code` | VARCHAR(18) | 统一社会信用代码（GB 32100-2015） |
-| `name` | VARCHAR(100) | 企业名称（4-26字，汉字或汉字+括号） |
-| `legal_rep` | VARCHAR(20) | 权力人姓名（2-5字，纯汉字） |
-| `location_id` | VARCHAR(36) | 关联 eiker-address-db 中的 address_id |
-| `fact_time` | TIMESTAMPTZ | 事实发生时间 |
-| `fact_record_time` | TIMESTAMPTZ | 入巢时间 |
-| `ent_record_scene` | SMALLINT | 企业新增场景：1=基础拉新；2=用户拉新；3=业务拉新；4=公司拉新 |
-| `legal_rep_record_scene` | SMALLINT | 权力人新增场景：1=代为确定性主张；2=确定实际主张；3=权力人替换并主张 |
-| `task_id` | VARCHAR(36) | 关联任务单 UUID |
+| `reg_no` | VARCHAR(50) | 注册号 |
+| `name` | VARCHAR(200) | 企业名称（4-26字，汉字或汉字+括号） |
+| `legal_rep` | VARCHAR(50) | 法定代表人（2-5字，纯汉字） |
+| `company_type` | VARCHAR(100) | 公司类型 |
+| `found_date` | DATE | 成立日期 |
+| `reg_capital` | DECIMAL(20, 6) | 注册资本 |
+| `reg_capital_currency` | VARCHAR(10) | 注册资本币种（默认：人民币） |
+| `approve_date` | DATE | 核准日期 |
+| `registration_authority` | VARCHAR(200) | 登记机关 |
+| `status` | VARCHAR(50) | 登记状态（存续/在营/开业/在册/吊销/注销/迁出/停业/清算） |
+| `address` | VARCHAR(500) | 住所 |
+| `business_scope` | TEXT | 经营范围 |
+| `business_term_start` | DATE | 营业期限自 |
+| `business_term_end` | DATE | 营业期限至 |
 
-#### 核心数据表：`company_task`（任务单）
+#### 拉新任务管理数据表（8张表，详见 company-task 设计文档）
 
-> 由 business 层 eiker-company-update 内部管理，atomic 层只负责 CRUD。
+> 任务单管理系统已重构为完整的8张表体系，替代原单表 company_task 及多张中间结果表。
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `task_id` | VARCHAR(36) | 任务单 UUID |
-| `task_type` | SMALLINT | 1=基础拉新；2=用户拉新；3=业务拉新；4=公司拉新 |
-| `task_status` | SMALLINT | 0=PENDING；1=IN_PROGRESS；2=SUCCESS；3=FAILED |
-| `input_source` | VARCHAR(500) | 输入来源标识（文件路径/图片路径/数据标识） |
-| `payload` | JSONB | 采信来源、凭证、处理规则 |
-| `result` | JSONB | 处理结果 |
-| `workflow_instance_id` | VARCHAR(64) | Dapr Workflow 实例ID |
-| `retry_count` | SMALLINT | 重试次数 |
-| `error_msg` | TEXT | 失败原因 |
+**实体关系图：**
+```
+task_type_config (任务类型配置)
+    ↑
+    │ 1:N
+    │
+task_main (任务主表)
+    ├─ 1:N → task_data_temp (任务数据临时表)
+    │           ├─ 1:N → data_verify_result (数据验证结果表)
+    │           └─ 1:N → third_api_log (第三方API调用日志表)
+    │           └─ 1:1 → task_nest_log (任务入巢日志表)
+    │
+    └─ 1:N → task_step_log (任务步骤日志表)
 
-#### 中间结果表：`company_ocr_log`（OCR处理日志）
+data_verify_rule (数据验证规则表)
+    ↓
+    │ 1:N
+    └─ data_verify_result
+```
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `task_id` | VARCHAR(36) | 关联任务单 |
-| `model_name` | VARCHAR(50) | OCR 模型（paddleocr / easyocr / tesseract） |
-| `image_path` | VARCHAR(500) | 图片路径或 URL |
-| `raw_result` | JSONB | OCR 原始输出 |
-| `credit_code` | VARCHAR(18) | 提取的统一社会信用代码 |
-| `company_name` | VARCHAR(100) | 提取的企业名称 |
-| `legal_rep_name` | VARCHAR(20) | 提取的权力人姓名 |
-| `is_success` | BOOLEAN | 提取是否成功 |
-| `fail_reason` | VARCHAR(200) | 失败原因 |
+**核心表说明：**
 
-#### 中间结果表：`company_data_verify_log`（第三方数据源验证日志）
+| 表名 | 说明 | 关键设计点 |
+|------|------|-----------|
+| `task_type_config` | 任务类型配置表 | 配置4种拉新类型及默认验证规则 |
+| `task_main` | 任务主表 | 任务UUID、类型、状态、统计信息、Dapr Workflow实例ID |
+| `task_data_temp` | 任务数据临时表 | 原始解析数据、提取关键字段、行级处理状态(row_status) |
+| `task_step_log` | 任务步骤日志表 | 每一步骤输入输出完整留痕、耗时统计 |
+| `data_verify_rule` | 数据验证规则表 | 4大类17条验证规则，可配置化管理 |
+| `data_verify_result` | 数据验证结果表 | 逐条数据逐条规则记录，关联third_api_log |
+| `third_api_log` | 第三方API调用日志表 | 完整HTTP请求响应记录，天眼查等API调用留痕 |
+| `task_nest_log` | 任务入巢日志表 | 任务数据与数巢数据关联桥梁，永久保留 |
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `task_id` | VARCHAR(36) | 关联任务单 |
-| `source_name` | VARCHAR(50) | 数据源名称（tianyancha 等） |
-| `query_name` | VARCHAR(100) | 查询企业名称 |
-| `response_data` | JSONB | 数据源返回结果 |
-| `is_consistent` | BOOLEAN | 与输入三要素是否一致 |
-| `is_success` | BOOLEAN | API 调用是否成功 |
-| `fail_reason` | VARCHAR(200) | 失败原因 |
+**数据验证规则分类（共17条）：**
+- **完整性验证（6条）**：统一社会信用代码、企业名称、法定代表人、成立日期、登记状态、住所不能为空
+- **合规性验证（7条）**：信用代码格式、企业名称格式/长度、法定代表人格式/长度、成立日期、登记状态
+- **重复性验证（4条）**：同名不同企（本任务/数巢）、同企不同名（本任务/数巢）
+- **真实性验证（1条）**：天眼查API验证
 
-#### 中间结果表：`company_conflict_log`（冲突处理日志）
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `task_id` | VARCHAR(36) | 关联任务单 |
-| `conflict_type` | SMALLINT | 1=同名不同企；2=同企不同名 |
-| `new_credit_code` | VARCHAR(18) | 新记录信用代码 |
-| `new_name` | VARCHAR(100) | 新记录企业名称 |
-| `existing_ent_code` | VARCHAR(36) | 已有企业 UUID |
-| `existing_credit_code` | VARCHAR(18) | 已有信用代码 |
-| `existing_name` | VARCHAR(100) | 已有企业名称 |
-| `resolution` | SMALLINT | 1=全部保留独立存在；2=复用UUID挂载新名称；3=拒绝拉新 |
-| `resolution_reason` | VARCHAR(200) | 处理原因 |
-
-#### 中间结果表：`company_first_link_log`（首支验证日志）
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `task_id` | VARCHAR(36) | 关联任务单 |
-| `fact_id` | BIGINT | 关联 company_fact.id |
-| `verifier_type` | SMALLINT | 1=系统自验（基础/公司拉新）；2=用户确认；3=业务方确认 |
-| `expected_data` | JSONB | 写入前信息（用于比对） |
-| `actual_data` | JSONB | 写入后信息 |
-| `is_consistent` | BOOLEAN | 是否一致 |
-| `verify_status` | SMALLINT | 0=待确认；1=已通过；2=已拒绝 |
-| `verified_at` | TIMESTAMPTZ | 确认时间 |
+**状态流转：**
+- task_main: PENDING(0) → IN_PROGRESS(1) → SUCCESS(2)/FAILED(3)
+- task_data_temp.row_status: 待处理(0) → 解析中(1) → 解析完成(2) → 验证中(3) → 验证通过(4)/验证失败(5) → 入巢中(6) → 入巢成功(7)/入巢失败(8)
 
 #### Dapr pub/sub 事件
 
@@ -269,10 +253,11 @@ Step 6  写入 eiker-address-db
 | `query-company-fact-by-name` | 按企业名称查询事实数据 |
 | `query-company-fact-by-code` | 按信用代码查询事实数据 |
 | `query-company-fact-by-ent-code` | 按企业 UUID 查询事实数据 |
-| `save-ocr-log` | 保存 OCR 处理日志 |
-| `save-data-verify-log` | 保存第三方数据源验证日志 |
-| `save-conflict-log` | 保存冲突处理日志 |
-| `save-first-link-log` | 保存首支验证日志 |
+| `query-task-main` | 查询任务主表信息 |
+| `save-task-step-log` | 保存任务步骤日志 |
+| `save-data-verify-result` | 保存数据验证结果 |
+| `save-third-api-log` | 保存第三方API调用日志 |
+| `save-task-nest-log` | 保存任务入巢日志 |
 
 ---
 
