@@ -82,10 +82,10 @@ PENDING → IN_PROGRESS → SUCCESS
 
 | 拉新类型 | 触发方式 | 核心步骤 |
 |---------|---------|---------|
-| 基础拉新 | 结构化文件批量导入（sql/csv/xlsx/json） | 文件解析 → 任务单入队 → 三要素校验 → 冲突处理 → 写库 → 触发位置预置 |
+| 基础拉新 | 结构化文件批量导入（sql/csv/xlsx/json/txt/xml） | 文件解析 → 任务单入队 → 三要素校验 → 天眼查验实 → 冲突处理 → 写库 → 触发位置预置 |
 | 用户拉新 | 用户上传天眼查截图 | OCR 识别 → 三要素校验 → 天眼查验实 → 冲突处理 → 写库 → 触发位置预置 → 首支验证 |
 | 业务拉新 | 业务系统推送企业列表 | 三要素校验 → 天眼查验实 → 冲突处理 → 写库 → 触发位置预置 → 首支验证 |
-| 公司拉新 | 企业提交结构化文件（与基础拉新输入一致） | 文件解析 → 任务单入队 → 三要素校验 → 冲突处理 → 写库 → 触发位置预置 → 首支验证 |
+| 公司拉新 | 企业提交结构化文件（与基础拉新输入一致） | 文件解析 → 任务单入队 → 三要素校验 → 天眼查验实 → 冲突处理 → 写库 → 触发位置预置 → 首支验证 |
 
 #### 依赖服务（atomic + business）
 
@@ -191,6 +191,25 @@ Step 6  写入 eiker-address-db
 | `business_term_start` | DATE | 营业期限自 |
 | `business_term_end` | DATE | 营业期限至 |
 
+#### 冲突处理数据表：`company_conflict_log`（企业名称冲突日志）
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `conflict_id` | VARCHAR(36) | 冲突记录 UUID（对外标识） |
+| `task_id` | VARCHAR(36) | 触发冲突的任务 ID |
+| `temp_data_id` | BIGINT | 关联 task_data_temp.id |
+| `conflict_type` | SMALLINT | 冲突类型：1=同名不同企，2=同企不同名 |
+| `credit_code_incoming` | VARCHAR(18) | 新数据信用代码 |
+| `name_incoming` | VARCHAR(200) | 新数据企业名称 |
+| `credit_code_existing` | VARCHAR(18) | 已存在数据信用代码 |
+| `name_existing` | VARCHAR(200) | 已存在数据企业名称 |
+| `ent_code_existing` | VARCHAR(36) | 已存在企业 UUID |
+| `resolution` | SMALLINT | 处理状态：0=待处理，1=已全部保留，2=人工处理中，3=已处理 |
+| `resolved_at` | TIMESTAMPTZ | 处理完成时间 |
+| `resolved_by` | VARCHAR(64) | 处理人 |
+
+> 与 §8 决策 C-03 对应：同名不同企全部保留，冲突记录写入本表，支持后续人工介入处理。
+
 #### 拉新任务管理数据表（8张表，详见 company-task 设计文档）
 
 > 任务单管理系统已重构为完整的8张表体系，替代原单表 company_task 及多张中间结果表。
@@ -204,7 +223,8 @@ task_type_config (任务类型配置)
 task_main (任务主表)
     ├─ 1:N → task_data_temp (任务数据临时表)
     │           ├─ 1:N → data_verify_result (数据验证结果表)
-    │           └─ 1:N → third_api_log (第三方API调用日志表)
+    │           │           └─ N:1 → third_api_log (via third_api_log_id，仅真实性验证时有值)
+    │           ├─ 1:N → third_api_log (第三方API调用日志表)
     │           └─ 1:1 → task_nest_log (任务入巢日志表)
     │
     └─ 1:N → task_step_log (任务步骤日志表)
@@ -221,14 +241,14 @@ data_verify_rule (数据验证规则表)
 |------|------|-----------|
 | `task_type_config` | 任务类型配置表 | 配置4种拉新类型及默认验证规则 |
 | `task_main` | 任务主表 | 任务UUID、类型、状态、统计信息、Dapr Workflow实例ID |
-| `task_data_temp` | 任务数据临时表 | 原始解析数据、提取关键字段、行级处理状态(row_status) |
+| `task_data_temp` | 任务数据临时表 | 原始解析数据、提取关键字段、解析阶段状态(parse_status)、行级综合处理状态(row_status) |
 | `task_step_log` | 任务步骤日志表 | 每一步骤输入输出完整留痕、耗时统计 |
-| `data_verify_rule` | 数据验证规则表 | 4大类17条验证规则，可配置化管理 |
+| `data_verify_rule` | 数据验证规则表 | 4大类18条验证规则，可配置化管理 |
 | `data_verify_result` | 数据验证结果表 | 逐条数据逐条规则记录，关联third_api_log |
 | `third_api_log` | 第三方API调用日志表 | 完整HTTP请求响应记录，天眼查等API调用留痕 |
 | `task_nest_log` | 任务入巢日志表 | 任务数据与数巢数据关联桥梁，永久保留 |
 
-**数据验证规则分类（共17条）：**
+**数据验证规则分类（共18条）：**
 - **完整性验证（6条）**：统一社会信用代码、企业名称、法定代表人、成立日期、登记状态、住所不能为空
 - **合规性验证（7条）**：信用代码格式、企业名称格式/长度、法定代表人格式/长度、成立日期、登记状态
 - **重复性验证（4条）**：同名不同企（本任务/数巢）、同企不同名（本任务/数巢）
@@ -253,6 +273,9 @@ data_verify_rule (数据验证规则表)
 | `query-company-fact-by-name` | 按企业名称查询事实数据 |
 | `query-company-fact-by-code` | 按信用代码查询事实数据 |
 | `query-company-fact-by-ent-code` | 按企业 UUID 查询事实数据 |
+| `create-task-main` | 创建任务主表记录 |
+| `update-task-main` | 更新任务状态及统计信息（task_status / total_count / success_count / fail_count） |
+| `save-task-data-temp` | 批量写入任务数据临时表 |
 | `query-task-main` | 查询任务主表信息 |
 | `save-task-step-log` | 保存任务步骤日志 |
 | `save-data-verify-result` | 保存数据验证结果 |
@@ -402,6 +425,8 @@ data_verify_rule (数据验证规则表)
 | `eiker-file-pandas` | Python | `atomic/atomic-python/eiker-file-python/eiker-file-pandas/` | pandas | csv/xlsx/json |
 
 > 同一格式提供多语言实现，business 层根据实际部署环境选择调用哪个子模块。现有 `eiker-file-go` 根目录代码迁移至 `eiker-file-excelize` 子模块。
+
+> ⚠️ **待补充**：基础拉新和公司拉新支持的 `sql`、`txt`、`xml` 格式当前无对应原子解析子模块，需补充实现（建议：`eiker-file-go/eiker-file-sqlparser`、`eiker-file-go/eiker-file-txtparser`、`eiker-file-go/eiker-file-xmlparser`）。
 
 ---
 
