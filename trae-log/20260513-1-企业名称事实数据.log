@@ -1,0 +1,4 @@
+1. 请显示你读到的全局规则
+2. 读取设计文档《eiker-be\docs\superpowers\specs\2026-05-12-company-name-service-design_1.1.md》实现模块eiker-company-db功能
+   1) eiker-company-db路径: eiker-be\atomic\atomic-go\eiker-data\eiker-company-db
+   2) 请在过程中显示你读到的相关文档片段
