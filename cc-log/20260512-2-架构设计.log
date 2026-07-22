@@ -1,0 +1,1635 @@
+架构设计
+1. 阅读《/doc/企业名称》目录下的需求文档
+   1) 原始需求文档：《【企业名称服务】之「企业名称搜索服务」产品文档.docx》, 《企业名称服务碰头会  基础数据初始化以及增新逻辑  AI总结会议记录   徐光凯 20260401.docx》, 《企业名称服务数巢化demo设计.docx》, 《企业名称服务准C（系统逻辑）.pdf》
+   2) 汇总：《企业名称服务需求分析报告.md》
+   先阅读原始需求文档，然后再阅读汇总
+2. 基于技术栈dapr拆分原子服务
+   1) 根据需求文档要求，选择合适的开发语言（主要是考虑是否有成熟的开源框架支持服务能力，如ocr识别可能python的开源框架更多）: go, java, python
+   2) 在atomic相应目录下新增module或者修改现有的module，支持企业名称所有功能实现
+   3) 如果是java语言，则需要修改eiker-java-common在这里增加需要引入的三方依赖的最新版本号
+   
+   
+这几种方案都不对，我再补充一下，分层以及边界：
+1. business
+   1) 前端api调用: 封装atomic提供的各类api对外提供服务
+   2) 任务执行: 根据规则生成任务，并启动任务，同时进行任务各节点调度
+2. atomic
+   1) 封装第三方开源框架(go, java, python)提供基础服务, 根据三方框架的语言选择相应实现语言
+   2) 或者读取business转下来的数据查询、处理需求去DB中查询或者更新数据，用go实现
+   3) 调用第三方api进行数据查询、处理操作，用go实现 
+根据这个要求，重新设计business, atomic的模块
+
+
+1. 名词纠正
+   1) 企业名称，用company
+   2) 位置服务，用location
+2. business-企业名称，需要拆分为2个module
+   1) eiker-company-service: 企业名称-数据服务，对外暴露搜索、申诉、权力人主张/申诉、企业信息查询接口任务执行
+   2) eiker-company-update: 企业名称-拉新服务，4种拉新任务生成与调度、任务单状态机、Dapr Workflow 多步骤编排
+3. business-位置，也需要参照企业名称拆分为2个module
+4. atomic-企业名称 PostgreSQL 事实数据 CRUD + ES 索引写入/搜索查询，需要拆分为2个module   
+   1) 企业名称 PostgreSQL 事实数据 CRUD
+   2) 企业名称 ES 索引写入/搜索查询 
+   3) 企业名称 PostgreSQL, ES 索引，通过dapr的消息机制进行解耦
+5. eiker-third-api，需要根据api提供方新增多个子module   
+   1) eiker-third-api/eiker-third-tianyancha: 天眼查验实
+   2) eiker-third-api/eiker-third-tencent: 腾讯地图3类API、五要素认证
+6. eiker-ocr，需要根据模型新增多个子module，同时需要引入更多的开源模型   
+   1) eiker-ocr/eiker-ocr-PaddleOCR
+   2) eiker-ocr/eiker-ocr-EasyOCR
+   ...
+7. eiker-file-go，需要根据文件类型+开源框架新增多个子module，同时需要引入更多的开源框架   
+   1) eiker-file-go/eiker-file-excelize
+   ...
+   同时也需要考虑eiker-file-java, eiker-file-python是否可以新增
+   同一个需求需要考虑多种实现方案
+8. business 层 Dapr Workflow 编排，用go语言，所以无需添加Java依赖
+
+
+1. 修正错误
+   1) 3.2 eiker-company-update（企业名称·拉新服务）/ 依赖 atomic 服务 / eiker-location-update：拉新成功后触发位置预置
+	  错误: 归类错误，eiker-location-update是business服务，不是atomic服务。
+	  补充说明：business是可以依赖business的
+   2) 4.1 eiker-company-db，请阅读《eiker-be\doc\企业名称\企业名称服务.pdf》
+      A. 需要增加更多的中间结果表，用于数据处理留痕
+	  B. 所有表都需要有如下公共字段
+	     id       自增主键
+		 is_current 是否当前有效版本，用于多版本数据
+		 trace_id 日志链路追踪id
+		 owner    数据拥有人，用于数据权限控制
+		 creater  创建人
+		 create_time 创建时间，DB取当前时间（insert时写入）
+		 updater  修改人
+		 update_time 修改时间，DB取当前时间（update时写入）
+         remark   备注
+	  C. company_fact、company_task
+	     a. 根据文档补齐缺失字段
+		 b. company_fact，需要增加字段关联company_location
+	  D. 暴露的 Dapr 服务调用方法
+	     a. 根据文档补齐方法	
+	     b. 任务单相关方法需要上移至business的内部方法	
+   3) 4.2 eiker-company-es
+      A. ES Index Schema（索引名：`company_name`）
+	     只需要在核心数据表：`company_fact`基础上补充`name.pinyin`、`legal_rep.pinyin`即可
+   4) 4.3 eiker-location-db
+      A. 这个服务是定位于比company更底层的服务，它除了可以管理企业地址还可以管理其他的地址，是一个共用的地址服务
+   5) 4.4.1 eiker-third-tianyancha
+      A. tianyancha只提供一个查询api：根据企业名称查询企业列表
+2. Section 7 目录结构 — eiker-file-go、eiker-third-api、eiker-ocr 改为父目录 + 子模块结构，现有代码需要迁移，是否接受？
+   接受
+3. Section 8 待决策事项 — 特别是 C-03（同名不同企全部保留）和 G-06（公司拉新文本解析用 LLM 抽取），需业务侧确认
+   1) C-03
+      以《eiker-be\doc\企业名称\企业名称服务.pdf》描述为准
+   2) C-07
+      接受建议: 以流程图为准：OCR ≠ 库时申诉有依据
+   3) G-06
+      公司拉新的输入，与基础拉新一致
+   4) G-10
+      接受建议: 首期保留手动确认，生产环境另行定义
+   5) G-18/19 
+      接受建议: 首期返回失败，由 business 层处理重试或人工介入   
+4. eiker-third-identity — 五要素认证提供方预留占位，是否已有指定供应商可以直接填入？
+   1) 没有，继续预留   
+   2) 在eiker-third-tencent增加方法：用户二要素（名称+手机号码）认证、用户三要素（名称+手机号码+身份证号）认证、用户三要素（名称+手机号码+身份证号）认证+活体认证
+
+
+
+
+
+Windows PowerShell
+版权所有 (C) Microsoft Corporation。保留所有权利。
+
+尝试新的跨平台 PowerShell https://aka.ms/pscore6
+
+PS D:\code-1\xiaoyi-claude\eiker\eiker-be> claude
+ ▐▛███▜▌   Claude Code v2.1.139
+▝▜█████▛▘  Sonnet 4.6 · Claude Pro
+  ▘▘ ▝▝    D:\code-1\xiaoyi-claude\eiker\eiker-be
+
+  ↑ Install the PyCharm plugin from the JetBrains Marketplace: https://docs.claude.com/s/claude-code-jetbrains
+
+❯ 架构设计                                                                                                                                                                                                                          
+  1. 阅读《/doc/企业名称》目录下的需求文档                                                                                                                                                                                          
+     1) 原始需求文档：《【企业名称服务】之「企业名称搜索服务」产品文档.docx》, 《企业名称服务碰头会  基础数据初始化以及增新逻辑  AI总结会议记录   徐光凯 20260401.docx》, 《企业名称服务数巢化demo设计.docx》,                      
+  《企业名称服务准C（系统逻辑）.pdf》                                                                                                                                                                                               
+     2) 汇总：《企业名称服务需求分析报告.md》                                                                                                                                                                                       
+     先阅读原始需求文档，然后再阅读汇总                                                                                                                                                                                             
+  2. 基于技术栈dapr拆分原子服务                                                                                                                                                                                                     
+     1) 根据需求文档要求，选择合适的开发语言（主要是考虑是否有成熟的开源框架支持服务能力，如ocr识别可能python的开源框架更多）: go, java, python                                                                                     
+     2) 在atomic相应目录下新增module或者修改现有的module，支持企业名称所有功能实现                                                                                                                                                  
+     3) 如果是java语言，则需要修改eiker-java-common在这里增加需要引入的三方依赖的最新版本号                                                                                                                                         
+
+● Skill(brainstorming)
+  ⎿  Successfully loaded skill
+
+● 先探索项目上下文和需求文档。
+
+  Searched for 2 patterns, read 1 file (ctrl+o to expand)
+
+● 先读需求汇总和PDF，同时探索atomic目录结构。
+
+  Searched for 1 pattern, read 1 file (ctrl+o to expand)
+
+● 现在读PDF原始文档，并探索现有atomic服务结构。
+
+  Searched for 8 patterns, read 7 files (ctrl+o to expand)
+
+● 现在探索 eiker-java-common 和整个项目结构。
+
+  Searched for 3 patterns, read 3 files (ctrl+o to expand)
+
+● 上下文探索完成。现在我对整个项目有清晰认知。
+
+  已掌握信息：
+  - 需求分析报告已完整阅读（7处矛盾、20处流程缺口均已识别）
+  - 现有atomic服务：eiker-file-go（Go，文件解析）、eiker-third-api（Go，空壳）、eiker-ocr（Python，空壳）、eiker-file-java（Java，空壳）
+  - 技术栈：Java/Spring Boot + Dapr（服务调用走 Dapr gRPC）、eiker-java-common 作为公共库
+
+  ---
+  在提出方案之前，有一个架构级矛盾需要先决策（对应需求文档 C-06）：
+
+  Searched for 3 patterns, read 3 files (ctrl+o to expand)
+
+● 上下文探索完成。现在我对整个项目有清晰认知。
+
+  已掌握信息：
+  - 需求分析报告已完整阅读（7处矛盾、20处流程缺口均已识别）
+  - 现有atomic服务：eiker-file-go（Go，文件解析）、eiker-third-api（Go，空壳）、eiker-ocr（Python，空壳）、eiker-file-java（Java，空壳）
+  - 技术栈：Java/Spring Boot + Dapr（服务调用走 Dapr gRPC）、eiker-java-common 作为公共库
+
+  ---
+  在提出方案之前，有一个架构级矛盾需要先决策（对应需求文档 C-06）：
+
+  企业位置预置服务的归属：
+
+  - [准C逻辑] 将位置预置作为企业名称服务内的子流程（不独立部署）
+  - [会议记录] 明确要求："位置需要独立的数巢服务，企业名称服务中的预置位置只是引用"
+
+  这个决策直接影响我们要新建几个 atomic 服务。
+
+  请问：位置预置服务是否独立拆出作为单独的 atomic 服务？
+
+  A. 独立拆出（遵循会议记录）— 新建 eiker-ent-location-java，企业名称服务调用它
+  B. 内置为子流程（遵循准C逻辑）— 位置逻辑在企业名称服务内部实现，不独立部署
+
+✻ Brewed for 1m 53s
+
+❯ A                                                                                                                                                                                                                                 
+
+● 好，位置预置独立为 eiker-ent-location-java。现在提出整体 atomic 服务拆分方案（3种），供你选择。
+
+  ---
+  三种拆分方案
+
+  方案一：4+2 服务（推荐）
+  
+  新建 2 个 Java 服务，增强 2 个现有服务，复用 1 个
+
+  ┌─────────────────────────┬────────┬──────┬───────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+  │          服务           │  语言  │ 操作 │                                                     职责                                                      │
+  ├─────────────────────────┼────────┼──────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ eiker-ent-name-java     │ Java   │ 新建 │ 企业名称全部业务：拉新（4种）、任务单机制、申诉、权力人主张/申诉、搜索、查询；PostgreSQL + ES + Dapr Workflow │
+  ├─────────────────────────┼────────┼──────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ eiker-ent-location-java │ Java   │ 新建 │ 位置预置独立服务；腾讯地图三步调用、准确率处理逻辑；独立 PostgreSQL                                           │
+  ├─────────────────────────┼────────┼──────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ eiker-ocr               │ Python │ 实现 │ 双AI模型OCR（PaddleOCR + EasyOCR）；企业三要素提取；Dapr服务暴露                                              │
+  ├─────────────────────────┼────────┼──────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ eiker-third-api         │ Go     │ 实现 │ 天眼查验实、第三方数据源查询、五要素认证；Dapr服务暴露                                                        │
+  ├─────────────────────────┼────────┼──────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ eiker-file-go           │ Go     │ 复用 │ 文件解析（Excel/CSV/JSON），无需改动                                                                          │
+  └─────────────────────────┴────────┴──────┴───────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+  权衡： 核心业务内聚在一个Java服务，开发运维最简单；搜索与数据模型共享 ES index schema 避免跨服务所有权问题。推荐首期采用。
+
+  ---
+  方案二：5+2 服务（搜索独立）
+
+  方案一基础上，将搜索独立为 eiker-ent-search-java：
+
+  ┌───────────────────────┬─────────────────────────────────────────────────┐
+  │       新增服务        │                      职责                       │
+  ├───────────────────────┼─────────────────────────────────────────────────┤
+  │ eiker-ent-name-java   │ 拉新、任务单、申诉、权力人、查询；仅写 ES，不读 │
+  ├───────────────────────┼─────────────────────────────────────────────────┤
+  │ eiker-ent-search-java │ 搜索服务；仅读 ES；独立扩缩容                   │
+  └───────────────────────┴─────────────────────────────────────────────────┘
+
+  权衡： 搜索可独立扩缩容，读写分离更清晰；但两个服务共享同一 ES index，仍存在数据所有权边界模糊，且增加部署复杂度。
+
+  ---
+  方案三：6+2 服务（工作流独立）
+
+  在方案二基础上，再拆出 eiker-ent-workflow-java 专门做 Dapr Workflow 编排（申诉/主张多步骤流程）。
+
+  权衡： 过度拆分，工作流逻辑与业务数据耦合较深，强行独立会导致大量跨服务调用；当前需求规模不支持此粒度。
+
+  ---
+  我的推荐是方案一，理由：
+  1. 企业名称的搜索 ES schema 与事实数据强绑定，共同演进，拆开反而增加一致性维护成本
+  2. 首期实现需快速验证全链路，单一核心服务更易调试
+  3. 后续若搜索压力突出，方案一可无缝迁移到方案二
+
+  请问：采用哪种方案？
+
+✻ Worked for 30s
+
+❯ 这几种方案都不对，我再补充一下，分层以及边界：                                                                                                                                                                                    
+  1. business                                                                                                                                                                                                                       
+     1) 前端api调用: 封装atomic提供的各类api对外提供服务                                                                                                                                                                            
+     2) 任务执行: 根据规则生成任务，并启动任务，同时进行任务各节点调度                                                                                                                                                              
+  2. atomic                                                                                                                                                                                                                         
+     1) 封装第三方开源框架(go, java, python)提供基础服务, 根据三方框架的语言选择相应实现语言                                                                                                                                        
+     2) 或者读取business转下来的数据查询、处理需求去DB中查询或者更新数据，用go实现                                                                                                                                                  
+     3) 调用第三方api进行数据查询、处理操作，用go实现                                                                                                                                                                               
+  根据这个要求，重新设计business, atomic的模块                                                                                                                                                                                      
+
+● 理解了，你纠正了我的设计思路。原来我把业务编排逻辑错放到了 atomic 层。现在按照你定义的分层重新设计。
+
+  ---
+  重新设计：Business + Atomic 模块划分
+
+  Business 层（业务编排，新建）
+  
+  ┌────────────────────┬──────┬───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+  │        模块        │ 语言 │                                                                 职责                                                                  │
+  ├────────────────────┼──────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ eiker-ent-name     │ Java │ 前端API：对外暴露搜索、申诉、权力人主张/申诉、企业信息查询接口任务执行：4种拉新任务生成与调度、任务单状态机、Dapr Workflow 多步骤编排 │
+  ├────────────────────┼──────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ eiker-ent-location │ Java │ 前端API：位置查询接口任务执行：位置预置逻辑（准确率处理、三步腾讯地图调用策略）                                                       │
+  └────────────────────┴──────┴───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+  ---
+  Atomic 层（基础能力，新建/增强/复用）
+
+  ┌───────────────────────┬────────┬──────────────────┬──────────────────────────────────────────────────────────┐
+  │         模块          │  语言  │       操作       │                           职责                           │
+  ├───────────────────────┼────────┼──────────────────┼──────────────────────────────────────────────────────────┤
+  │ eiker-ent-name-db     │ Go     │ 新建             │ 企业名称 PostgreSQL 事实数据 CRUD + ES 索引写入/搜索查询 │
+  ├───────────────────────┼────────┼──────────────────┼──────────────────────────────────────────────────────────┤
+  │ eiker-ent-location-db │ Go     │ 新建             │ 位置预置 PostgreSQL CRUD                                 │
+  ├───────────────────────┼────────┼──────────────────┼──────────────────────────────────────────────────────────┤
+  │ eiker-third-api       │ Go     │ 实现（现有空壳） │ 天眼查验实、第三方数据源查询、腾讯地图3类API、五要素认证 │
+  ├───────────────────────┼────────┼──────────────────┼──────────────────────────────────────────────────────────┤
+  │ eiker-ocr             │ Python │ 实现（现有空壳） │ PaddleOCR + EasyOCR 双模型比对；企业三要素提取           │
+  ├───────────────────────┼────────┼──────────────────┼──────────────────────────────────────────────────────────┤
+  │ eiker-file-go         │ Go     │ 复用             │ 文件解析（Excel/CSV/JSON/SQL），已有实现                 │
+  └───────────────────────┴────────┴──────────────────┴──────────────────────────────────────────────────────────┘
+
+  ---
+  调用关系
+
+  前端
+    ↓
+  eiker-ent-name (business·Java)
+    ├─ Dapr invoke → eiker-ent-name-db    (atomic·Go)   PostgreSQL/ES
+    ├─ Dapr invoke → eiker-ocr            (atomic·Python) OCR
+    ├─ Dapr invoke → eiker-third-api      (atomic·Go)   天眼查/五要素
+    └─ Dapr invoke → eiker-ent-location   (business·Java) 触发位置预置
+
+  eiker-ent-location (business·Java)
+    ├─ Dapr invoke → eiker-ent-location-db (atomic·Go)  位置数据CRUD
+    └─ Dapr invoke → eiker-third-api       (atomic·Go)  腾讯地图API
+
+  ---
+  eiker-java-common 需新增依赖
+
+  ┌────────────────────────────┬────────────────────────────────┐
+  │            依赖            │              说明              │
+  ├────────────────────────────┼────────────────────────────────┤
+  │ dapr-sdk-workflow (1.12.0) │ business 层 Dapr Workflow 编排 │
+  └────────────────────────────┴────────────────────────────────┘
+
+  ---
+  这个分层是否符合你的预期？ 如果确认，我就进入下一步：编写详细设计文档。
+
+✻ Cooked for 1m 17s
+
+❯ 1. 名词纠正                                                                                                                                                                                                                       
+     1) 企业名称，用company                                                                                                                                                                                                         
+     2) 位置服务，用location                                                                                                                                                                                                        
+  2. business-企业名称，需要拆分为2个module                                                                                                                                                                                         
+     1) eiker-company-service: 企业名称-数据服务，对外暴露搜索、申诉、权力人主张/申诉、企业信息查询接口任务执行                                                                                                                     
+     2) eiker-company-update: 企业名称-拉新服务，4种拉新任务生成与调度、任务单状态机、Dapr Workflow 多步骤编排                                                                                                                      
+  3. business-位置，也需要参照企业名称拆分为2个module                                                                                                                                                                               
+  4. atomic-企业名称 PostgreSQL 事实数据 CRUD + ES 索引写入/搜索查询，需要拆分为2个module                                                                                                                                           
+     1) 企业名称 PostgreSQL 事实数据 CRUD                                                                                                                                                                                           
+     2) 企业名称 ES 索引写入/搜索查询                                                                                                                                                                                               
+     3) 企业名称 PostgreSQL, ES 索引，通过dapr的消息机制进行解耦                                                                                                                                                                    
+  5. eiker-third-api，需要根据api提供方新增多个子module                                                                                                                                                                             
+     1) eiker-third-api/eiker-third-tianyancha: 天眼查验实                                                                                                                                                                          
+     2) eiker-third-api/eiker-third-tencent: 腾讯地图3类API、五要素认证                                                                                                                                                             
+  6. eiker-ocr，需要根据模型新增多个子module，同时需要引入更多的开源模型                                                                                                                                                            
+     1) eiker-ocr/eiker-ocr-PaddleOCR                                                                                                                                                                                               
+     2) eiker-ocr/eiker-ocr-EasyOCR                                                                                                                                                                                                 
+     ...                                                                                                                                                                                                                            
+  7. eiker-file-go，需要根据文件类型+开源框架新增多个子module，同时需要引入更多的开源框架                                                                                                                                           
+     1) eiker-file-go/eiker-file-excelize                                                                                                                                                                                           
+     ...                                                                                                                                                                                                                            
+     同时也需要考虑eiker-file-java, eiker-file-python是否可以新增                                                                                                                                                                   
+     同一个需求需要考虑多种实现方案                                                                                                                                                                                                 
+  8. business 层 Dapr Workflow 编排，用go语言，所以无需添加Java依赖                                                                                                                                                                 
+
+● 理解，全部更新。现在给出修订后的完整设计。
+
+  ---
+  完整模块设计（修订版）
+
+  Business 层（Go）
+  
+  business/business-go/
+  ├── eiker-company-service/   # 企业名称·数据服务：搜索、申诉、权力人主张/申诉、信息查询 API
+  ├── eiker-company-update/    # 企业名称·拉新服务：4种拉新任务调度、任务单状态机、Dapr Workflow
+  ├── eiker-location-service/  # 位置·数据服务：位置信息查询 API
+  └── eiker-location-update/   # 位置·预置服务：准确率策略、腾讯地图三步调用、Dapr Workflow
+
+  ---
+  Atomic 层
+
+  企业名称数据（Go，新建）
+
+  atomic/atomic-go/
+  ├── eiker-company-db/    # 企业事实数据 PostgreSQL CRUD；写入后发布 Dapr pub/sub 事件
+  └── eiker-company-es/    # ES 索引写入/搜索查询；订阅 Dapr pub/sub 事件同步索引
+  解耦机制：eiker-company-db 写 PostgreSQL 成功 → pub topic company-fact-upserted → eiker-company-es 消费更新 ES 索引
+
+  位置数据（Go，新建）
+
+  atomic/atomic-go/
+  └── eiker-location-db/   # 位置数据 PostgreSQL CRUD
+
+  第三方 API（Go，在现有空壳下新增子模块）
+
+  atomic/atomic-go/eiker-third-api/
+  ├── eiker-third-tianyancha/   # 天眼查验实、第三方数据源三要素查询
+  └── eiker-third-tencent/      # 腾讯地图（地址解析/逆地址解析/关键词搜索）、五要素认证
+
+  OCR（Python，在现有空壳下新增子模块）
+
+  atomic/atomic-python/eiker-ocr/
+  ├── eiker-ocr-paddleocr/   # PaddleOCR（百度，中文识别优先）
+  ├── eiker-ocr-easyocr/     # EasyOCR（多语言备选）
+  └── eiker-ocr-tesseract/   # Tesseract（经典引擎，备选）
+
+  文件解析（多语言，同一需求多种实现）
+
+  atomic/atomic-go/eiker-file-go/
+  └── eiker-file-excelize/      # Go·excelize：Excel/xlsx（现有代码迁移进来）
+
+  atomic/atomic-java/eiker-file-java/
+  └── eiker-file-apache-poi/    # Java·Apache POI：xls/xlsx/csv
+
+  atomic/atomic-python/eiker-file-python/
+  ├── eiker-file-openpyxl/      # Python·openpyxl：xlsx
+  └── eiker-file-pandas/        # Python·pandas：csv/xlsx/json 统一解析
+
+  ---
+  eiker-java-common 变更
+
+  无需新增依赖（Workflow 用 Go 实现，无 Java 依赖需求）。
+
+  ---
+  调用关系总览
+
+  前端
+    ↓
+  eiker-company-service (business·Go)
+    ├─ Dapr invoke → eiker-company-db    写事实数据
+    ├─ Dapr invoke → eiker-company-es    搜索查询
+    └─ Dapr invoke → eiker-third-tianyancha / eiker-third-tencent
+
+  eiker-company-update (business·Go)
+    ├─ Dapr invoke → eiker-company-db    任务单写入
+    ├─ Dapr invoke → eiker-ocr-paddleocr / eiker-ocr-easyocr
+    ├─ Dapr invoke → eiker-third-tianyancha
+    ├─ Dapr invoke → eiker-file-excelize / eiker-file-pandas ...
+    └─ Dapr invoke → eiker-location-update  触发位置预置
+
+  eiker-location-update (business·Go)
+    ├─ Dapr invoke → eiker-location-db
+    └─ Dapr invoke → eiker-third-tencent  腾讯地图
+
+  eiker-company-db (atomic·Go)
+    └─ Dapr pub/sub publish → company-fact-upserted → eiker-company-es
+
+  ---
+  这个设计是否符合你的预期？确认后进入设计文档编写阶段。
+
+✻ Churned for 1m 14s
+
+❯ 符合预期                                                                                                                                                                                                                          
+
+● 好，开始编写设计文档。先检查目录是否存在。
+
+  Searching for 1 pattern… (ctrl+o to expand)
+  ⎿  "docs/**"
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ Create file
+ docs\superpowers\specs\2026-05-12-company-name-service-design.md
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+    1 # 企业名称服务架构设计规格说明
+    2 
+    3 > 版本：v1.0
+    4 > 日期：2026-05-12
+    5 > 需求来源：doc/企业名称/ 目录下全部原始文档 + 企业名称服务需求分析报告.md
+    6
+    7 ---
+    8
+    9 ## 1. 背景与目标
+   10
+   11 基于 Dapr 微服务框架，将企业名称服务（company）与位置预置服务（location）拆
+      分为多个职责单一的原子服务，并在其上构建业务编排层，实现：
+   12
+   13 - 企业名称数据的多来源拉新（批量/用户/业务/公司自主）
+   14 - 企业名称搜索、申诉、权力人主张/申诉、信息查询
+   15 - 企业位置信息独立预置与查询
+   16 - PostgreSQL 事实数据与 Elasticsearch 搜索索引通过 Dapr pub/sub 解耦同步
+   17
+   18 ---
+   19
+   20 ## 2. 分层架构
+   21
+   22 ```
+   23 ┌─────────────────────────────────────────────────────┐
+   24 │                     Business 层（Go）                │
+   25 │  eiker-company-service  eiker-company-update         │
+   26 │  eiker-location-service eiker-location-update        │
+   27 └────────────────┬────────────────────────────────────┘
+   28                  │  Dapr Service Invocation / Pub-Sub
+   29 ┌────────────────▼────────────────────────────────────┐
+   30 │                     Atomic 层                        │
+   31 │  Go: eiker-company-db  eiker-company-es              │
+   32 │      eiker-location-db                               │
+   33 │      eiker-third-api/eiker-third-tianyancha          │
+   34 │      eiker-third-api/eiker-third-tencent             │
+   35 │      eiker-file-go/eiker-file-excelize               │
+   36 │  Python: eiker-ocr/eiker-ocr-paddleocr               │
+   37 │          eiker-ocr/eiker-ocr-easyocr                 │
+   38 │          eiker-ocr/eiker-ocr-tesseract               │
+   39 │  Java: eiker-file-java/eiker-file-apache-poi         │
+   40 │  Python: eiker-file-python/eiker-file-openpyxl       │
+   41 │          eiker-file-python/eiker-file-pandas         │
+   42 └─────────────────────────────────────────────────────┘
+   43 ```
+   44
+   45 ---
+   46
+   47 ## 3. Business 层模块详述
+   48
+   49 ### 3.1 eiker-company-service（企业名称·数据服务）
+   50
+   51 - **语言**：Go
+   52 - **Dapr app-id**：`eiker-company-service`
+   53 - **目录**：`business/business-go/eiker-company-service/`
+   54 - **职责**：对外暴露企业名称域的查询类 API，不涉及数据写入
+   55
+   56 | API 方法 | 说明 | 依赖 atomic |
+   57 |---------|------|------------|
+   58 | `search-company` | 企业名称搜索（关键词/拼音） | eiker-company-es |
+   59 | `query-company-info` | 企业信息查询（按 UUID/信用代码） | eiker-company-e
+      s |
+   60 | `submit-company-appeal` | 提交企业名称申诉 | eiker-company-db, eiker-ocr-
+      *, eiker-third-tianyancha |
+   61 | `claim-power-holder` | 权力人主张 | eiker-company-db, eiker-third-tencent
+       |
+   62 | `appeal-power-holder` | 权力人申诉 | eiker-company-db, eiker-ocr-*, eiker
+      -third-tianyancha |
+   63
+   64 ---
+   65
+   66 ### 3.2 eiker-company-update（企业名称·拉新服务）
+   67
+   68 - **语言**：Go（含 Dapr Workflow 编排）
+   69 - **Dapr app-id**：`eiker-company-update`
+   70 - **目录**：`business/business-go/eiker-company-update/`
+   71 - **职责**：接收 4 种拉新来源，统一生成任务单，通过 Dapr Workflow 执行多步
+      骤拉新流程
+   72
+   73 #### 任务单状态机
+   74
+   75 ```
+   76 PENDING → IN_PROGRESS → SUCCESS
+   77                       → FAILED（可重试）
+   78 ```
+   79
+   80 #### 4 种拉新流程（均通过任务单机制统一执行）
+   81
+   82 | 拉新类型 | 触发方式 | 核心步骤 |
+   83 |---------|---------|---------|
+   84 | 基础拉新 | 结构化文件或图片批量导入 | 文件解析 → 任务单入队 → 校验 → 去重
+       → 写库 |
+   85 | 用户拉新 | 用户上传天眼查截图 | OCR 识别 → 三要素校验 → 天眼查验实 → 写库
+       → 首支验证 |
+   86 | 业务拉新 | 业务系统推送企业列表 | 天眼查验实 → 校验 → 同名冲突处理 → 写库
+       → 首支验证 |
+   87 | 公司拉新 | 企业主动提交信息说明 | 信息结构化 → 天眼查验实 → 校验 → 写库 →
+       首支验证 |
+   88
+   89 #### 依赖 atomic 服务
+   90
+   91 - `eiker-company-db`：任务单写入、企业事实数据写入
+   92 - `eiker-ocr-paddleocr` / `eiker-ocr-easyocr`：图片三要素 OCR（双模型比对）
+   93 - `eiker-third-tianyancha`：天眼查验实、第三方数据源查询
+   94 - `eiker-file-excelize` / `eiker-file-apache-poi` / `eiker-file-pandas`：文
+      件解析
+   95 - `eiker-location-update`：拉新成功后触发位置预置
+   96
+   97 ---
+   98
+   99 ### 3.3 eiker-location-service（位置·数据服务）
+  100
+  101 - **语言**：Go
+  102 - **Dapr app-id**：`eiker-location-service`
+  103 - **目录**：`business/business-go/eiker-location-service/`
+  104 - **职责**：对外暴露位置信息查询 API
+  105
+  106 | API 方法 | 说明 | 依赖 atomic |
+  107 |---------|------|------------|
+  108 | `query-location` | 按企业 UUID 查询预置位置信息 | eiker-location-db |
+  109
+  110 ---
+  111
+  112 ### 3.4 eiker-location-update（位置·预置服务）
+  113
+  114 - **语言**：Go（含 Dapr Workflow 编排）
+  115 - **Dapr app-id**：`eiker-location-update`
+  116 - **目录**：`business/business-go/eiker-location-update/`
+  117 - **职责**：接收企业地址，执行腾讯地图三步转化，将位置三要素写入 location D
+      B
+  118
+  119 #### 位置三要素转化流程（Dapr Workflow）
+  120
+  121 ```
+  122 Step 1  接收企业地址 + 信用代码省编码
+  123 Step 2  准确率策略判断（4种场景路由）
+  124 Step 3  调用腾讯地图「地址解析 API」→ 得到地理坐标
+  125 Step 4  调用腾讯地图「逆地址解析 API」→ 取首个不含括号的 POI
+  126 Step 5  特殊路径：落到省人民政府时调用「关键词搜索 API」
+  127 Step 6  写入 eiker-location-db
+  128 ```
+  129
+  130 #### 依赖 atomic 服务
+  131
+  132 - `eiker-location-db`：位置数据写入/查询
+  133 - `eiker-third-tencent`：腾讯地图三类 API
+  134
+  135 ---
+  136
+  137 ## 4. Atomic 层模块详述
+  138
+  139 ### 4.1 eiker-company-db（企业事实数据·PostgreSQL）
+  140
+  141 - **语言**：Go
+  142 - **Dapr app-id**：`eiker-company-db`
+  143 - **目录**：`atomic/atomic-go/eiker-company-db/`
+  144 - **职责**：企业事实数据 PostgreSQL CRUD；写入成功后通过 Dapr pub/sub 发布
+      事件触发 ES 同步
+  145
+  146 #### 核心数据表：`company_fact`
+  147
+  148 | 字段 | 类型 | 说明 |
+  149 |------|------|------|
+  150 | `id` | BIGSERIAL | 自增主键，内部排序，禁止插队 |
+  151 | `ent_code` | VARCHAR(36) | 企业 UUID v4（对外标识） |
+  152 | `credit_code` | VARCHAR(18) | 统一社会信用代码 |
+  153 | `name` | VARCHAR(100) | 企业名称 |
+  154 | `legal_rep` | VARCHAR(20) | 权力人姓名 |
+  155 | `fact_time` | TIMESTAMPTZ | 事实发生时间 |
+  156 | `fact_record_time` | TIMESTAMPTZ | 入巢时间 |
+  157 | `ent_record_scene` | SMALLINT | 新增场景：1=基础拉新；2=用户拉新；3=业务
+      拉新；4=公司拉新 |
+  158 | `legal_rep_record_scene` | SMALLINT | 权力人场景：1=代为确定性主张；2=确
+      定实际主张；3=权力人替换并主张 |
+  159
+  160 #### 核心数据表：`company_task`（任务单）
+  161
+  162 | 字段 | 类型 | 说明 |
+  163 |------|------|------|
+  164 | `id` | BIGSERIAL | 自增主键 |
+  165 | `task_id` | VARCHAR(36) | 任务单 UUID |
+  166 | `source` | SMALLINT | 来源：1=基础；2=用户；3=业务；4=公司 |
+  167 | `status` | SMALLINT | 状态：0=PENDING；1=IN_PROGRESS；2=SUCCESS；3=FAILED
+       |
+  168 | `payload` | JSONB | 采信来源、凭证、处理规则 |
+  169 | `result` | JSONB | 处理结果 |
+  170 | `created_at` | TIMESTAMPTZ | 创建时间 |
+  171 | `updated_at` | TIMESTAMPTZ | 更新时间 |
+  172
+  173 #### Dapr pub/sub 事件
+  174
+  175 - **发布 topic**：`company-fact-upserted`
+  176 - **触发时机**：PostgreSQL 写入成功后
+  177 - **Payload**：`{ "ent_code": "...", "fact_id": ..., "action": "create|upda
+      te" }`
+  178
+  179 #### 暴露的 Dapr 服务调用方法
+  180
+  181 | 方法 | 说明 |
+  182 |------|------|
+  183 | `upsert-company-fact` | 写入/更新企业事实数据 |
+  184 | `query-company-fact` | 按条件查询事实数据 |
+  185 | `create-task` | 创建任务单 |
+  186 | `update-task-status` | 更新任务单状态 |
+  187 | `query-task` | 查询任务单 |
+  188
+  189 ---
+  190
+  191 ### 4.2 eiker-company-es（企业名称·ES 索引）
+  192
+  193 - **语言**：Go
+  194 - **Dapr app-id**：`eiker-company-es`
+  195 - **目录**：`atomic/atomic-go/eiker-company-es/`
+  196 - **职责**：维护 ES 索引；订阅 `company-fact-upserted` 事件自动同步；提供搜
+      索查询接口
+  197
+  198 #### ES Index Schema（索引名：`company_name`）
+  199
+  200 | 字段 | 类型 | 分词策略 | 用途 |
+  201 |------|------|---------|------|
+  202 | `_id` | keyword | — | 企业名称 SHA256 哈希 |
+  203 | `name` | text | ngram 2_3 | 片段模糊搜索 |
+  204 | `name.pinyin` | text | 逐汉字分拼音 | 拼音连续子字符串匹配 |
+  205 | `name.char_token` | text | 逐字符 | 过滤搜索词中不存在的字 |
+  206 | `name.keyword` | keyword | 不分词 | 精确查询 |
+  207 | `credit_code` | text | edge_ngram 4_18 | 信用代码前缀匹配 |
+  208 | `legal_rep` | text | 逐字分词 | 连续子字符串匹配 |
+  209 | `legal_rep.pinyin` | text | 逐汉字分拼音 | 权力人拼音匹配 |
+  210 | `ent_code` | keyword | 不分词 | UUID 精确查询 |
+  211 | `fact_id` | keyword | 不分词 | 事实 ID 精确查询 |
+  212
+  213 #### 暴露的 Dapr 服务调用方法
+  214
+  215 | 方法 | 说明 |
+  216 |------|------|
+  217 | `search-company` | 关键词/拼音搜索，返回最多100条 |
+  218 | `query-company-by-id` | 按 ent_code 或 credit_code 精确查询 |
+  219
+  220 #### Dapr pub/sub 订阅
+  221
+  222 - **订阅 topic**：`company-fact-upserted`
+  223 - **处理**：接收事件 → 写入/更新 ES 文档
+  224
+  225 ---
+  226
+  227 ### 4.3 eiker-location-db（位置数据·PostgreSQL）
+  228
+  229 - **语言**：Go
+  230 - **Dapr app-id**：`eiker-location-db`
+  231 - **目录**：`atomic/atomic-go/eiker-location-db/`
+  232 - **职责**：位置预置数据 PostgreSQL CRUD
+  233
+  234 #### 核心数据表：`company_location`
+  235
+  236 | 字段 | 类型 | 说明 |
+  237 |------|------|------|
+  238 | `id` | BIGSERIAL | 自增主键 |
+  239 | `ent_code` | VARCHAR(36) | 企业 UUID（与 company_fact.ent_code 关联） |
+  240 | `address` | VARCHAR(200) | 原始企业地址 |
+  241 | `longitude` | DECIMAL(10,7) | 经度 |
+  242 | `latitude` | DECIMAL(10,7) | 纬度 |
+  243 | `poi_name` | VARCHAR(200) | 地标名称（位置三要素之一） |
+  244 | `poi_address` | VARCHAR(200) | 地标地址（位置三要素之一） |
+  245 | `poi_id` | VARCHAR(50) | 腾讯地图 POI ID（位置三要素之一） |
+  246 | `created_at` | TIMESTAMPTZ | 创建时间 |
+  247
+  248 #### 暴露的 Dapr 服务调用方法
+  249
+  250 | 方法 | 说明 |
+  251 |------|------|
+  252 | `upsert-location` | 写入/更新位置数据 |
+  253 | `query-location` | 按 ent_code 查询位置 |
+  254
+  255 ---
+  256
+  257 ### 4.4 eiker-third-api 子模块
+  258
+  259 #### 4.4.1 eiker-third-tianyancha
+  260
+  261 - **语言**：Go
+  262 - **Dapr app-id**：`eiker-third-tianyancha`
+  263 - **目录**：`atomic/atomic-go/eiker-third-api/eiker-third-tianyancha/`
+  264
+  265 | 方法 | 说明 |
+  266 |------|------|
+  267 | `verify-company-triple` | 按信用代码查询天眼查返回企业三要素，与输入比对
+      |
+  268 | `query-company-by-code` | 按信用代码查询企业信息（第三方数据源） |
+  269
+  270 #### 4.4.2 eiker-third-tencent
+  271
+  272 - **语言**：Go
+  273 - **Dapr app-id**：`eiker-third-tencent`
+  274 - **目录**：`atomic/atomic-go/eiker-third-api/eiker-third-tencent/`
+  275
+  276 | 方法 | 说明 |
+  277 |------|------|
+  278 | `geocode-address` | 腾讯地图地址解析（地址 → 坐标） |
+  279 | `reverse-geocode` | 腾讯地图逆地址解析（坐标 → POI 列表） |
+  280 | `search-poi-by-keyword` | 腾讯地图关键词搜索（关键词 → POI） |
+  281 | `verify-five-elements` | 五要素认证（企业名称+信用代码+权力人+手机号+身份
+      证号） |
+  282
+  283 ---
+  284
+  285 ### 4.5 eiker-ocr 子模块
+  286
+  287 每个子模块均通过 Dapr gRPC service invocation 暴露统一方法：`extract-compan
+      y-triple`
+  288
+  289 输入：图片 base64 / 图片文件路径
+  290 输出：`{ "credit_code": "...", "name": "...", "legal_rep": "..." }`
+  291
+  292 | 子模块 | 语言 | 目录 | 框架 | 特点 |
+  293 |--------|------|------|------|------|
+  294 | `eiker-ocr-paddleocr` | Python | `atomic/atomic-python/eiker-ocr/eiker-oc
+      r-paddleocr/` | PaddleOCR | 中文识别优先，百度开源 |
+  295 | `eiker-ocr-easyocr` | Python | `atomic/atomic-python/eiker-ocr/eiker-ocr-
+      easyocr/` | EasyOCR | 多语言备选 |
+  296 | `eiker-ocr-tesseract` | Python | `atomic/atomic-python/eiker-ocr/eiker-oc
+      r-tesseract/` | pytesseract | 经典引擎，轻量备选 |
+  297
+  298 **双模型比对策略**（在 business 层实现）：同时调用2个模型，三要素完全一致则
+      通过，否则返回识别失败。
+  299
+  300 ---
+  301
+  302 ### 4.6 eiker-file 子模块
+  303
+  304 每个子模块通过 Dapr service invocation 暴露统一方法：`parse-file`
+  305
+  306 输入：文件 base64 + 文件类型标识
+  307 输出：`{ "rows": [ { "credit_code": "...", "name": "...", "legal_rep": "...
+      " }, ... ] }`
+  308
+  309 | 子模块 | 语言 | 目录 | 框架 | 支持格式 |
+  310 |--------|------|------|------|---------|
+  311 | `eiker-file-excelize` | Go | `atomic/atomic-go/eiker-file-go/eiker-file-e
+      xcelize/` | excelize | xlsx/xls |
+  312 | `eiker-file-apache-poi` | Java | `atomic/atomic-java/eiker-file-java/eike
+      r-file-apache-poi/` | Apache POI | xls/xlsx/csv |
+  313 | `eiker-file-openpyxl` | Python | `atomic/atomic-python/eiker-file-python/
+      eiker-file-openpyxl/` | openpyxl | xlsx |
+  314 | `eiker-file-pandas` | Python | `atomic/atomic-python/eiker-file-python/ei
+      ker-file-pandas/` | pandas | csv/xlsx/json |
+  315
+  316 > 同一文件格式提供多语言实现，business 层根据实际部署环境选择调用哪个子模块
+      。
+  317
+  318 ---
+  319
+  320 ## 5. Dapr 服务调用关系总览
+  321
+  322 ```
+  323 前端
+  324   ↓
+  325 eiker-company-service (business·Go)
+  326   ├─ invoke → eiker-company-es       搜索/查询
+  327   ├─ invoke → eiker-company-db       申诉/主张写入
+  328   ├─ invoke → eiker-ocr-paddleocr    OCR（主）
+  329   ├─ invoke → eiker-ocr-easyocr      OCR（备）
+  330   └─ invoke → eiker-third-tianyancha 天眼查验实
+  331
+  332 eiker-company-update (business·Go)
+  333   ├─ invoke → eiker-company-db       任务单管理、事实数据写入
+  334   ├─ invoke → eiker-ocr-paddleocr / eiker-ocr-easyocr
+  335   ├─ invoke → eiker-third-tianyancha
+  336   ├─ invoke → eiker-file-excelize / eiker-file-pandas  文件解析
+  337   └─ invoke → eiker-location-update  触发位置预置
+  338
+  339 eiker-location-update (business·Go)
+  340   ├─ invoke → eiker-location-db
+  341   └─ invoke → eiker-third-tencent    腾讯地图三类API
+  342
+  343 eiker-company-db (atomic·Go)
+  344   └─ pub/sub publish → topic: company-fact-upserted
+  345
+  346 eiker-company-es (atomic·Go)
+  347   └─ pub/sub subscribe ← topic: company-fact-upserted
+  348 ```
+  349
+  350 ---
+  351
+  352 ## 6. eiker-java-common 变更
+  353
+  354 **无需新增依赖。** Business 层使用 Go 实现 Dapr Workflow，与 Java common 库
+      无关。
+  355
+  356 ---
+  357
+  358 ## 7. 目录结构汇总
+  359
+  360 ```
+  361 eiker-be/
+  362 ├── business/
+  363 │   └── business-go/
+  364 │       ├── eiker-company-service/
+  365 │       ├── eiker-company-update/
+  366 │       ├── eiker-location-service/
+  367 │       └── eiker-location-update/
+  368 ├── atomic/
+  369 │   ├── atomic-go/
+  370 │   │   ├── eiker-company-db/
+  371 │   │   ├── eiker-company-es/
+  372 │   │   ├── eiker-location-db/
+  373 │   │   ├── eiker-file-go/
+  374 │   │   │   └── eiker-file-excelize/   ← 现有 eiker-file-go 代码迁入
+  375 │   │   └── eiker-third-api/
+  376 │   │       ├── eiker-third-tianyancha/
+  377 │   │       └── eiker-third-tencent/
+  378 │   ├── atomic-java/
+  379 │   │   └── eiker-file-java/
+  380 │   │       └── eiker-file-apache-poi/
+  381 │   └── atomic-python/
+  382 │       ├── eiker-ocr/
+  383 │       │   ├── eiker-ocr-paddleocr/
+  384 │       │   ├── eiker-ocr-easyocr/
+  385 │       │   └── eiker-ocr-tesseract/
+  386 │       └── eiker-file-python/
+  387 │           ├── eiker-file-openpyxl/
+  388 │           └── eiker-file-pandas/
+  389 └── common/
+  390     ├── eiker-go-common/
+  391     ├── eiker-java-common/
+  387 │           ├── eiker-file-openpyxl/
+  388 │           └── eiker-file-pandas/
+  eiker-company-db (atomic·Go)
+    └─ Dapr pub/sub publish → company-fact-upserted → eiker-company-es
+
+  ---
+  这个设计是否符合你的预期？确认后进入设计文档编写阶段。
+
+✻ Churned for 1m 14s
+
+❯ 符合预期                                                                                                                                                                                                                          
+
+● 好，开始编写设计文档。先检查目录是否存在。
+
+  Searched for 1 pattern (ctrl+o to expand)
+
+● Write(docs\superpowers\specs\2026-05-12-company-name-service-design.md)
+  ⎿  Wrote 405 lines to docs\superpowers\specs\2026-05-12-company-name-service-design.md
+      1 # 企业名称服务架构设计规格说明
+      2 
+      3 > 版本：v1.0
+      4 > 日期：2026-05-12
+      5 > 需求来源：doc/企业名称/ 目录下全部原始文档 + 企业名称服务需求分析报告.md
+      6 
+      7 ---
+      8 
+      9 ## 1. 背景与目标
+     … +395 lines (ctrl+o to expand)
+
+● 规格自检中... 发现一处需修正：verify-five-elements 被放在 eiker-third-tencent 下，但需求文档 G-20 明确指出五要素认证的第三方提供方未定义，不应归在腾讯模块。内联修正。
+
+● Update(docs\superpowers\specs\2026-05-12-company-name-service-design.md)
+  ⎿  Added 10 lines
+      278  | `geocode-address` | 腾讯地图地址解析（地址 → 坐标） |
+      279  | `reverse-geocode` | 腾讯地图逆地址解析（坐标 → POI 列表） |
+      280  | `search-poi-by-keyword` | 腾讯地图关键词搜索（关键词 → POI） |
+      281 +                                                                                                                                                                                                                  
+      282 +#### 4.4.3 eiker-third-identity（待定）                                                                                                                                                                           
+      283 +                                                                                                                                                                                                                  
+      284 +- **语言**：Go                                                                                                                                                                                                    
+      285 +- **Dapr app-id**：`eiker-third-identity`                                                                                                                                                                         
+      286 +- **目录**：`atomic/atomic-go/eiker-third-api/eiker-third-identity/`                                                                                                                                              
+      287 +- **说明**：五要素认证提供方在需求文档中未定义（见缺口 G-20），此处预留模块占位，具体对接方在提供方确认后实现                                                                                                     
+      288 +                                                                                                                                                                                                                  
+      289 +| 方法 | 说明 |                                                                                                                                                                                                   
+      290 +|------|------|                                                                                                                                                                                                   
+      291  | `verify-five-elements` | 五要素认证（企业名称+信用代码+权力人+手机号+身份证号） |
+      292  
+      293  ---
+
+● 同步更新目录结构和调用关系中的 eiker-third-identity。
+
+● Update(docs\superpowers\specs\2026-05-12-company-name-service-design.md)
+  ⎿  Error editing file
+
+  Read 1 file (ctrl+o to expand)
+
+● Update(docs\superpowers\specs\2026-05-12-company-name-service-design.md)
+  ⎿  Added 2 lines, removed 1 line
+      384  │   │   │   └── eiker-file-excelize/   ← 现有 eiker-file-go 代码迁入
+      385  │   │   └── eiker-third-api/
+      386  │   │       ├── eiker-third-tianyancha/
+      387 -│   │       └── eiker-third-tencent/                                                                                                                                                                              
+      387 +│   │       ├── eiker-third-tencent/                                                                                                                                                                              
+      388 +│   │       └── eiker-third-identity/   ← 五要素认证（提供方待定）                                                                                                                                                
+      389  │   ├── atomic-java/
+      390  │   │   └── eiker-file-java/
+      391  │   │       └── eiker-file-apache-poi/
+
+● 规格自检完成，修正了以下问题：
+  - verify-five-elements 从 eiker-third-tencent 中独立为 eiker-third-identity，避免将提供方未知的能力错误归属给腾讯模块
+
+  设计文档已写入：docs/superpowers/specs/2026-05-12-company-name-service-design.md
+
+  （项目根目录不是 git 仓库，跳过 commit 步骤）
+  
+  ---
+  请审阅设计文档，主要关注以下几个决策点：
+
+  1. Section 7 目录结构 — eiker-file-go、eiker-third-api、eiker-ocr 改为父目录 + 子模块结构，现有代码需要迁移，是否接受？
+  2. Section 8 待决策事项 — 特别是 C-03（同名不同企全部保留）和 G-06（公司拉新文本解析用 LLM 抽取），需业务侧确认
+  3. eiker-third-identity — 五要素认证提供方预留占位，是否已有指定供应商可以直接填入？
+
+  如果文档没有问题，我们进入实现计划编写阶段。
+
+✻ Crunched for 2m 27s
+
+❯ 1. 修正错误                                                                                                                                                                                                                       
+     1) 3.2 eiker-company-update（企业名称·拉新服务）/ 依赖 atomic 服务 / eiker-location-update：拉新成功后触发位置预置                                                                                                             
+        错误: 归类错误，eiker-location-update是business服务，不是atomic服务。                                                                                                                                                       
+        补充说明：business是可以依赖business的                                                                                                                                                                                      
+     2) 4.1 eiker-company-db，请阅读《eiker-be\doc\企业名称\企业名称服务.pdf》                                                                                                                                                      
+        A. 需要增加更多的中间结果表，用于数据处理留痕                                                                                                                                                                               
+        B. 所有表都需要有如下公共字段                                                                                                                                                                                               
+           id       自增主键                                                                                                                                                                                                        
+           is_current 是否当前有效版本，用于多版本数据                                                                                                                                                                              
+           trace_id 日志链路追踪id                                                                                                                                                                                                  
+           owner    数据拥有人，用于数据权限控制                                                                                                                                                                                    
+           creater  创建人                                                                                                                                                                                                          
+           create_time 创建时间，DB取当前时间（insert时写入）                                                                                                                                                                       
+           updater  修改人                                                                                                                                                                                                          
+           update_time 修改时间，DB取当前时间（update时写入）                                                                                                                                                                       
+           remark   备注                                                                                                                                                                                                            
+        C. company_fact、company_task                                                                                                                                                                                               
+           a. 根据文档补齐缺失字段                                                                                                                                                                                                  
+           b. company_fact，需要增加字段关联company_location                                                                                                                                                                        
+        D. 暴露的 Dapr 服务调用方法                                                                                                                                                                                                 
+           a. 根据文档补齐方法                                                                                                                                                                                                      
+           b. 任务单相关方法需要上移至business的内部方法                                                                                                                                                                            
+     3) 4.2 eiker-company-es                                                                                                                                                                                                        
+        A. ES Index Schema（索引名：`company_name`）                                                                                                                                                                                
+           只需要在核心数据表：`company_fact`基础上补充`name.pinyin`、`legal_rep.pinyin`即可                                                                                                                                        
+     4) 4.3 eiker-location-db                                                                                                                                                                                                       
+        A. 这个服务是定位于比company更底层的服务，它除了可以管理企业地址还可以管理其他的地址，是一个共用的地址服务                                                                                                                  
+     5) 4.4.1 eiker-third-tianyancha                                                                                                                                                                                                
+        A. tianyancha只提供一个查询api：根据企业名称查询企业列表                                                                                                                                                                    
+  2. Section 7 目录结构 — eiker-file-go、eiker-third-api、eiker-ocr 改为父目录 + 子模块结构，现有代码需要迁移，是否接受？                                                                                                           
+     接受                                                                                                                                                                                                                           
+  3. Section 8 待决策事项 — 特别是 C-03（同名不同企全部保留）和 G-06（公司拉新文本解析用 LLM 抽取），需业务侧确认                                                                                                                   
+     1) C-03                                                                                                                                                                                                                        
+        以《eiker-be\doc\企业名称\企业名称服务.pdf》描述为准                                                                                                                                                                        
+     2) C-07                                                                                                                                                                                                                        
+        接受建议: 以流程图为准：OCR ≠ 库时申诉有依据                                                                                                                                                                                
+     3) G-06                                                                                                                                                                                                                        
+        公司拉新的输入，与基础拉新一致                                                                                                                                                                                              
+     4) G-10                                                                                                                                                                                                                        
+        接受建议: 首期保留手动确认，生产环境另行定义                                                                                                                                                                                
+     5) G-18/19                                                                                                                                                                                                                     
+        接受建议: 首期返回失败，由 business 层处理重试或人工介入                                                                                                                                                                    
+  4. eiker-third-identity — 五要素认证提供方预留占位，是否已有指定供应商可以直接填入？                                                                                                                                              
+     1) 没有，继续预留                                                                                                                                                                                                              
+     2) 在eiker-third-tencent增加方法：用户二要素（名称+手机号码）认证、用户三要素（名称+手机号码+身份证号）认证、用户三要素（名称+手机号码+身份证号）认证+活体认证                                                                 
+
+● 先读取 PDF 原始文档，再更新设计文档。
+
+  Read 1 file (ctrl+o to expand)
+
+● PDF 解析工具不可用，尝试备用方式读取。
+
+● Bash(python -c "import pdfminer; print('pdfminer available')" 2>&1 || echo "pdfminer not found")
+  ⎿  pdfminer not found
+   
+● Bash(python -c "import pypdf; print('pypdf available')" 2>&1 || python -c "import PyPDF2; print('PyPDF2 available')" 2>&1 || echo "no pdf library found")
+  ⎿  no pdf library found
+ 
+● Bash(pip install pdfminer.six -q && python -c "
+      from pdfminer.high_level import extract_text…)
+  ⎿  Error: Exit code 127
+     /usr/bin/bash: line 5: pip: command not found
+
+● Bash(pip3 install pdfminer.six -q && python3 -c "
+      from pdfminer.high_level import extract_text…)
+  ⎿  Error: Exit code 127
+     /usr/bin/bash: line 5: pip3: command not found
+
+● PowerShell(pip install pdfminer.six -q; if ($?) { python -c "from pdfminer.high_level import extract_text; text = extract_text(r'D:\code-1\xiaoyi-claude\eiker\eiker-be\doc…)
+  ⎿  Error: Exit code 1
+     pip : The term 'pip' is not recognized as the name of a cmdlet, function, script file, or operable program. Check the spelling of the name, or if a path was included, verify that the path is correct and try again.
+     At line:1 char:1 
+     + pip install pdfminer.six -q; if ($?) { python -c "from pdfminer.high_ ...
+     + ~~~
+         + CategoryInfo          : ObjectNotFound: (pip:String) [], CommandNotFoundException
+         + FullyQualifiedErrorId : CommandNotFoundException
+
+● PowerShell(Get-Command python* | Select-Object Name, Source)
+  ⎿  (No output)
+
+● PowerShell(Get-Command py,python,python3 -ErrorAction SilentlyContinue | Select-Object Name,Source; where.exe python 2>&1; where.exe py 2>&1)
+  ⎿  C:\Users\Administrator\AppData\Local\Microsoft\WindowsApps\python.exe
+     C:\Users\Administrator\AppData\Local\Programs\Python\Launcher\py.exe
+
+● PowerShell(py -m pip install pdfminer.six -q 2>&1 | Select-Object -Last 3; if ($LASTEXITCODE -eq 0) { py -c "from pdfminer.high_level import extract_text; text = extract_t…)
+  ⎿  [notice] A new release of pip is available: 25.3 -> 26.1.1
+     [notice] To update, run: C:\xyprogram\Python\Python313\python.exe -m pip install --upgrade pip
+  ⎿  (timeout 2m)
+
+● PowerShell(py -c "
+            from pdfminer.high_level import extract_text…)
+● PowerShell(Get-Command python* | Select-Object Name, Source)
+  ⎿  (No output)
+
+● PowerShell(Get-Command py,python,python3 -ErrorAction SilentlyContinue | Select-Object Name,Source; where.exe python 2>&1; where.exe py 2>&1)
+  ⎿  C:\Users\Administrator\AppData\Local\Microsoft\WindowsApps\python.exe
+     C:\Users\Administrator\AppData\Local\Programs\Python\Launcher\py.exe
+
+● PowerShell(py -m pip install pdfminer.six -q 2>&1 | Select-Object -Last 3; if ($LASTEXITCODE -eq 0) { py -c "from pdfminer.high_level import extract_text; text = extract_t…)
+  ⎿  [notice] A new release of pip is available: 25.3 -> 26.1.1
+     [notice] To update, run: C:\xyprogram\Python\Python313\python.exe -m pip install --upgrade pip
+  ⎿  (timeout 2m)
+
+● PowerShell(py -c "
+            from pdfminer.high_level import extract_text…)
+  ⎿  '\x0c'
+     ---
+
+● PDF 是图片型，文字提取为空。基于需求分析报告中对 PDF 内容的引用，结合用户补充说明更新文档。现在按所有修正点逐一更新设计文档。
+
+  Read 1 file (ctrl+o to expand)
+
+● 变更点较多，直接重写全文档以确保一致性。
+
+● Write(docs\superpowers\specs\2026-05-12-company-name-service-design.md)
+  ⎿  Added 216 lines, removed 118 lines
+      1  # 企业名称服务架构设计规格说明
+      2  
+      3 -> 版本：v1.0                                                                                                                                                                                                        
+      3 +> 版本：v1.1                                                                                                                                                                                                        
+      4  > 日期：2026-05-12
+      5  > 需求来源：doc/企业名称/ 目录下全部原始文档 + 企业名称服务需求分析报告.md
+      6  
+     ...
+      20  ## 2. 分层架构
+      21  
+      22  ```
+      23 -┌─────────────────────────────────────────────────────┐                                                                                                                                                            
+      24 -│                     Business 层（Go）                │                                                                                                                                                           
+      25 -│  eiker-company-service  eiker-company-update         │                                                                                                                                                           
+      26 -│  eiker-location-service eiker-location-update        │                                                                                                                                                           
+      27 -└────────────────┬────────────────────────────────────┘                                                                                                                                                            
+      28 -                 │  Dapr Service Invocation / Pub-Sub                                                                                                                                                              
+      29 -┌────────────────▼────────────────────────────────────┐                                                                                                                                                            
+      30 -│                     Atomic 层                        │                                                                                                                                                           
+      31 -│  Go: eiker-company-db  eiker-company-es              │                                                                                                                                                           
+      32 -│      eiker-location-db                               │                                                                                                                                                           
+      33 -│      eiker-third-api/eiker-third-tianyancha          │                                                                                                                                                           
+      34 -│      eiker-third-api/eiker-third-tencent             │                                                                                                                                                           
+      35 -│      eiker-file-go/eiker-file-excelize               │                                                                                                                                                           
+      36 -│  Python: eiker-ocr/eiker-ocr-paddleocr               │                                                                                                                                                           
+      37 -│          eiker-ocr/eiker-ocr-easyocr                 │                                                                                                                                                           
+      38 -│          eiker-ocr/eiker-ocr-tesseract               │                                                                                                                                                           
+      39 -│  Java: eiker-file-java/eiker-file-apache-poi         │                                                                                                                                                           
+      40 -│  Python: eiker-file-python/eiker-file-openpyxl       │                                                                                                                                                           
+      41 -│          eiker-file-python/eiker-file-pandas         │                                                                                                                                                           
+      42 -└─────────────────────────────────────────────────────┘                                                                                                                                                            
+      23 +┌──────────────────────────────────────────────────────────┐                                                                                                                                                       
+      24 +│                      Business 层（Go）                    │                                                                                                                                                      
+      25 +│  eiker-company-service   eiker-company-update             │                                                                                                                                                      
+      26 +│  eiker-location-service  eiker-location-update            │                                                                                                                                                      
+      27 +└─────────────────┬────────────────────────────────────────┘                                                                                                                                                       
+      28 +                  │  Dapr Service Invocation / Pub-Sub                                                                                                                                                             
+      29 +┌─────────────────▼────────────────────────────────────────┐                                                                                                                                                       
+      30 +│                      Atomic 层                            │                                                                                                                                                      
+      31 +│  Go:     eiker-company-db   eiker-company-es              │                                                                                                                                                      
+      32 +│          eiker-address-db                                 │                                                                                                                                                      
+      33 +│          eiker-third-api/eiker-third-tianyancha           │                                                                                                                                                      
+      34 +│          eiker-third-api/eiker-third-tencent              │                                                                                                                                                      
+      35 +│          eiker-third-api/eiker-third-identity（待定）     │                                                                                                                                                      
+      36 +│          eiker-file-go/eiker-file-excelize                │                                                                                                                                                      
+      37 +│  Python: eiker-ocr/eiker-ocr-paddleocr                   │                                                                                                                                                       
+      38 +│          eiker-ocr/eiker-ocr-easyocr                     │                                                                                                                                                       
+      39 +│          eiker-ocr/eiker-ocr-tesseract                   │                                                                                                                                                       
+      40 +│          eiker-file-python/eiker-file-openpyxl            │                                                                                                                                                      
+      41 +│          eiker-file-python/eiker-file-pandas              │                                                                                                                                                      
+      42 +│  Java:   eiker-file-java/eiker-file-apache-poi            │                                                                                                                                                      
+      43 +└──────────────────────────────────────────────────────────┘                                                                                                                                                       
+      44  ```
+      45  
+      46  ---
+     ...
+      54  - **目录**：`business/business-go/eiker-company-service/`
+      55  - **职责**：对外暴露企业名称域的查询类 API，不涉及数据写入
+      56  
+      56 -| API 方法 | 说明 | 依赖 atomic |                                                                                                                                                                                  
+      57 -|---------|------|------------|                                                                                                                                                                                    
+      57 +| API 方法 | 说明 | 依赖服务 |                                                                                                                                                                                     
+      58 +|---------|------|---------|                                                                                                                                                                                       
+      59  | `search-company` | 企业名称搜索（关键词/拼音） | eiker-company-es |
+      60  | `query-company-info` | 企业信息查询（按 UUID/信用代码） | eiker-company-es |
+      61  | `submit-company-appeal` | 提交企业名称申诉 | eiker-company-db, eiker-ocr-*, eiker-third-tianyancha |
+      61 -| `claim-power-holder` | 权力人主张 | eiker-company-db, eiker-third-tencent |                                                                                                                                      
+      62 +| `claim-power-holder` | 权力人主张 | eiker-company-db, eiker-third-identity |                                                                                                                                     
+      63  | `appeal-power-holder` | 权力人申诉 | eiker-company-db, eiker-ocr-*, eiker-third-tianyancha |
+      64  
+      65  ---
+     ...
+      71  - **目录**：`business/business-go/eiker-company-update/`
+      72  - **职责**：接收 4 种拉新来源，统一生成任务单，通过 Dapr Workflow 执行多步骤拉新流程
+      73  
+      73 -#### 任务单状态机                                                                                                                                                                                                  
+      74 +#### 任务单状态机（business 层内部逻辑）                                                                                                                                                                           
+      75  
+      76  ```
+      77  PENDING → IN_PROGRESS → SUCCESS
+     ...
+       82  
+       83  | 拉新类型 | 触发方式 | 核心步骤 |
+       84  |---------|---------|---------|
+       84 -| 基础拉新 | 结构化文件或图片批量导入 | 文件解析 → 任务单入队 → 校验 → 去重 → 写库 |                                                                                                                              
+       85 -| 用户拉新 | 用户上传天眼查截图 | OCR 识别 → 三要素校验 → 天眼查验实 → 写库 → 首支验证 |                                                                                                                          
+       86 -| 业务拉新 | 业务系统推送企业列表 | 天眼查验实 → 校验 → 同名冲突处理 → 写库 → 首支验证 |                                                                                                                          
+       87 -| 公司拉新 | 企业主动提交信息说明 | 信息结构化 → 天眼查验实 → 校验 → 写库 → 首支验证 |                                                                                                                            
+       85 +| 基础拉新 | 结构化文件批量导入（sql/csv/xlsx/json） | 文件解析 → 任务单入队 → 三要素校验 → 冲突处理 → 写库 → 触发位置预置 |                                                                                      
+       86 +| 用户拉新 | 用户上传天眼查截图 | OCR 识别 → 三要素校验 → 天眼查验实 → 冲突处理 → 写库 → 触发位置预置 → 首支验证 |                                                                                                
+       87 +| 业务拉新 | 业务系统推送企业列表 | 三要素校验 → 天眼查验实 → 冲突处理 → 写库 → 触发位置预置 → 首支验证 |                                                                                                         
+       88 +| 公司拉新 | 企业提交结构化文件（与基础拉新输入一致） | 文件解析 → 任务单入队 → 三要素校验 → 冲突处理 → 写库 → 触发位置预置 → 首支验证 |                                                                          
+       89  
+       89 -#### 依赖 atomic 服务                                                                                                                                                                                             
+       90 +#### 依赖服务（atomic + business）                                                                                                                                                                                
+       91  
+       91 -- `eiker-company-db`：任务单写入、企业事实数据写入                                                                                                                                                                
+       92 -- `eiker-ocr-paddleocr` / `eiker-ocr-easyocr`：图片三要素 OCR（双模型比对）                                                                                                                                       
+       93 -- `eiker-third-tianyancha`：天眼查验实、第三方数据源查询                                                                                                                                                          
+       94 -- `eiker-file-excelize` / `eiker-file-apache-poi` / `eiker-file-pandas`：文件解析                                                                                                                                 
+       95 -- `eiker-location-update`：拉新成功后触发位置预置                                                                                                                                                                 
+       92 +| 服务 | 层级 | 用途 |                                                                                                                                                                                            
+       93 +|------|------|------|                                                                                                                                                                                            
+       94 +| `eiker-company-db` | atomic | 企业事实数据写入、处理日志写入 |                                                                                                                                                  
+       95 +| `eiker-ocr-paddleocr` / `eiker-ocr-easyocr` | atomic | 图片三要素 OCR（双模型比对） |                                                                                                                           
+       96 +| `eiker-third-tianyancha` | atomic | 天眼查查询验实 |                                                                                                                                                            
+       97 +| `eiker-file-excelize` / `eiker-file-apache-poi` / `eiker-file-pandas` | atomic | 文件解析 |                                                                                                                     
+       98 +| `eiker-location-update` | **business** | 拉新成功后触发位置预置 |                                                                                                                                               
+       99  
+      100  ---
+      101  
+     ...
+      106  - **目录**：`business/business-go/eiker-location-service/`
+      107  - **职责**：对外暴露位置信息查询 API
+      108  
+      106 -| API 方法 | 说明 | 依赖 atomic |                                                                                                                                                                                 
+      107 -|---------|------|------------|                                                                                                                                                                                   
+      108 -| `query-location` | 按企业 UUID 查询预置位置信息 | eiker-location-db |                                                                                                                                           
+      109 +| API 方法 | 说明 | 依赖服务 |                                                                                                                                                                                    
+      110 +|---------|------|---------|                                                                                                                                                                                      
+      111 +| `query-location` | 按实体类型+实体ID查询预置位置信息 | eiker-address-db |                                                                                                                                       
+      112  
+      113  ---
+      114  
+     ...
+      117  - **语言**：Go（含 Dapr Workflow 编排）
+      118  - **Dapr app-id**：`eiker-location-update`
+      119  - **目录**：`business/business-go/eiker-location-update/`
+      117 -- **职责**：接收企业地址，执行腾讯地图三步转化，将位置三要素写入 location DB                                                                                                                                      
+      120 +- **职责**：接收企业地址，执行腾讯地图三步转化，将位置三要素写入 eiker-address-db                                                                                                                                 
+      121  
+      122  #### 位置三要素转化流程（Dapr Workflow）
+      123  
+      124  ```
+      122 -Step 1  接收企业地址 + 信用代码省编码                                                                                                                                                                             
+      125 +Step 1  接收企业地址 + 信用代码省编码 + entity_type + entity_id                                                                                                                                                   
+      126  Step 2  准确率策略判断（4种场景路由）
+      127 +          ├── 省编码一致                    → 直接使用腾讯返回                                                                                                                                                    
+      128 +          ├── 省编码不一致 + 含省级信息     → 直接使用腾讯返回                                                                                                                                                    
+      129 +          ├── 省编码不一致 + 无省级信息     → 补省市县后重新调用                                                                                                                                                  
+      130 +          └── 其他                         → 补省后默认省人民政府地址                                                                                                                                             
+      131  Step 3  调用腾讯地图「地址解析 API」→ 得到地理坐标
+      132  Step 4  调用腾讯地图「逆地址解析 API」→ 取首个不含括号的 POI
+      133  Step 5  特殊路径：落到省人民政府时调用「关键词搜索 API」
+      127 -Step 6  写入 eiker-location-db                                                                                                                                                                                    
+      134 +Step 6  写入 eiker-address-db                                                                                                                                                                                     
+      135  ```
+      136  
+      130 -#### 依赖 atomic 服务                                                                                                                                                                                             
+      137 +#### 依赖服务（atomic）                                                                                                                                                                                           
+      138  
+      132 -- `eiker-location-db`：位置数据写入/查询                                                                                                                                                                          
+      139 +- `eiker-address-db`：地址数据写入/查询                                                                                                                                                                           
+      140  - `eiker-third-tencent`：腾讯地图三类 API
+      141  
+      142  ---
+      143  
+      144  ## 4. Atomic 层模块详述
+      145  
+      146 +### 公共字段规范                                                                                                                                                                                                  
+      147 +                                                                                                                                                                                                                  
+      148 +所有数据表均须包含以下公共字段：                                                                                                                                                                                  
+      149 +                                                                                                                                                                                                                  
+      150 +| 字段 | 类型 | 说明 |                                                                                                                                                                                            
+      151 +|------|------|------|                                                                                                                                                                                            
+      152 +| `id` | BIGSERIAL | 自增主键 |                                                                                                                                                                                   
+      153 +| `is_current` | BOOLEAN | 是否当前有效版本（用于多版本数据） |                                                                                                                                                   
+      154 +| `trace_id` | VARCHAR(64) | 日志链路追踪ID |                                                                                                                                                                     
+      155 +| `owner` | VARCHAR(64) | 数据拥有人（用于数据权限控制） |                                                                                                                                                        
+      156 +| `creater` | VARCHAR(64) | 创建人 |                                                                                                                                                                              
+      157 +| `create_time` | TIMESTAMPTZ | 创建时间（DB insert 时自动写入） |                                                                                                                                                
+      158 +| `updater` | VARCHAR(64) | 修改人 |                                                                                                                                                                              
+      159 +| `update_time` | TIMESTAMPTZ | 修改时间（DB update 时自动写入） |                                                                                                                                                
+      160 +| `remark` | VARCHAR(500) | 备注 |                                                                                                                                                                                
+      161 +                                                                                                                                                                                                                  
+      162 +> 以下各表字段仅列出业务字段，公共字段默认包含。                                                                                                                                                                  
+      163 +                                                                                                                                                                                                                  
+      164 +---                                                                                                                                                                                                               
+      165 +                                                                                                                                                                                                                  
+      166  ### 4.1 eiker-company-db（企业事实数据·PostgreSQL）
+      167  
+      168  - **语言**：Go
+      169  - **Dapr app-id**：`eiker-company-db`
+      170  - **目录**：`atomic/atomic-go/eiker-company-db/`
+      144 -- **职责**：企业事实数据 PostgreSQL CRUD；写入成功后通过 Dapr pub/sub 发布事件触发 ES 同步                                                                                                                        
+      171 +- **职责**：企业名称域 PostgreSQL CRUD；写入事实数据后通过 Dapr pub/sub 发布事件触发 ES 同步                                                                                                                      
+      172  
+      146 -#### 核心数据表：`company_fact`                                                                                                                                                                                   
+      173 +#### 核心数据表：`company_fact`（企业事实数据）                                                                                                                                                                   
+      174  
+      175  | 字段 | 类型 | 说明 |
+      176  |------|------|------|
+      150 -| `id` | BIGSERIAL | 自增主键，内部排序，禁止插队 |                                                                                                                                                               
+      151 -| `ent_code` | VARCHAR(36) | 企业 UUID v4（对外标识） |                                                                                                                                                           
+      152 -| `credit_code` | VARCHAR(18) | 统一社会信用代码 |                                                                                                                                                                
+      153 -| `name` | VARCHAR(100) | 企业名称 |                                                                                                                                                                              
+      154 -| `legal_rep` | VARCHAR(20) | 权力人姓名 |                                                                                                                                                                        
+      177 +| `ent_code` | VARCHAR(36) | 企业 UUID v4（对外标识，公域使用） |                                                                                                                                                 
+      178 +| `credit_code` | VARCHAR(18) | 统一社会信用代码（GB 32100-2015） |                                                                                                                                               
+      179 +| `name` | VARCHAR(100) | 企业名称（4-26字，汉字或汉字+括号） |                                                                                                                                                   
+      180 +| `legal_rep` | VARCHAR(20) | 权力人姓名（2-5字，纯汉字） |                                                                                                                                                       
+      181 +| `location_id` | VARCHAR(36) | 关联 eiker-address-db 中的 address_id |                                                                                                                                           
+      182  | `fact_time` | TIMESTAMPTZ | 事实发生时间 |
+      183  | `fact_record_time` | TIMESTAMPTZ | 入巢时间 |
+      157 -| `ent_record_scene` | SMALLINT | 新增场景：1=基础拉新；2=用户拉新；3=业务拉新；4=公司拉新 |                                                                                                                      
+      158 -| `legal_rep_record_scene` | SMALLINT | 权力人场景：1=代为确定性主张；2=确定实际主张；3=权力人替换并主张 |                                                                                                        
+      184 +| `ent_record_scene` | SMALLINT | 企业新增场景：1=基础拉新；2=用户拉新；3=业务拉新；4=公司拉新 |                                                                                                                  
+      185 +| `legal_rep_record_scene` | SMALLINT | 权力人新增场景：1=代为确定性主张；2=确定实际主张；3=权力人替换并主张 |                                                                                                    
+      186 +| `task_id` | VARCHAR(36) | 关联任务单 UUID |                                                                                                                                                                     
+      187  
+      188  #### 核心数据表：`company_task`（任务单）
+      189  
+      190 +> 由 business 层 eiker-company-update 内部管理，atomic 层只负责 CRUD。                                                                                                                                            
+      191 +                                                                                                                                                                                                                  
+      192  | 字段 | 类型 | 说明 |
+      193  |------|------|------|
+      164 -| `id` | BIGSERIAL | 自增主键 |                                                                                                                                                                                   
+      194  | `task_id` | VARCHAR(36) | 任务单 UUID |
+      166 -| `source` | SMALLINT | 来源：1=基础；2=用户；3=业务；4=公司 |                                                                                                                                                    
+      167 -| `status` | SMALLINT | 状态：0=PENDING；1=IN_PROGRESS；2=SUCCESS；3=FAILED |                                                                                                                                     
+      195 +| `task_type` | SMALLINT | 1=基础拉新；2=用户拉新；3=业务拉新；4=公司拉新 |                                                                                                                                       
+      196 +| `task_status` | SMALLINT | 0=PENDING；1=IN_PROGRESS；2=SUCCESS；3=FAILED |                                                                                                                                      
+      197 +| `input_source` | VARCHAR(500) | 输入来源标识（文件路径/图片路径/数据标识） |                                                                                                                                    
+      198  | `payload` | JSONB | 采信来源、凭证、处理规则 |
+      199  | `result` | JSONB | 处理结果 |
+      170 -| `created_at` | TIMESTAMPTZ | 创建时间 |                                                                                                                                                                         
+      171 -| `updated_at` | TIMESTAMPTZ | 更新时间 |                                                                                                                                                                         
+      200 +| `workflow_instance_id` | VARCHAR(64) | Dapr Workflow 实例ID |                                                                                                                                                   
+      201 +| `retry_count` | SMALLINT | 重试次数 |                                                                                                                                                                           
+      202 +| `error_msg` | TEXT | 失败原因 |                                                                                                                                                                                 
+      203  
+      204 +#### 中间结果表：`company_ocr_log`（OCR处理日志）                                                                                                                                                                 
+      205 +                                                                                                                                                                                                                  
+      206 +| 字段 | 类型 | 说明 |                                                                                                                                                                                            
+      207 +|------|------|------|                                                                                                                                                                                            
+      208 +| `task_id` | VARCHAR(36) | 关联任务单 |                                                                                                                                                                          
+      209 +| `model_name` | VARCHAR(50) | OCR 模型（paddleocr / easyocr / tesseract） |                                                                                                                                      
+      210 +| `image_path` | VARCHAR(500) | 图片路径或 URL |                                                                                                                                                                  
+      211 +| `raw_result` | JSONB | OCR 原始输出 |                                                                                                                                                                           
+      212 +| `credit_code` | VARCHAR(18) | 提取的统一社会信用代码 |                                                                                                                                                          
+      213 +| `company_name` | VARCHAR(100) | 提取的企业名称 |                                                                                                                                                                
+      214 +| `legal_rep_name` | VARCHAR(20) | 提取的权力人姓名 |                                                                                                                                                             
+      215 +| `is_success` | BOOLEAN | 提取是否成功 |                                                                                                                                                                         
+      216 +| `fail_reason` | VARCHAR(200) | 失败原因 |                                                                                                                                                                       
+      217 +                                                                                                                                                                                                                  
+      218 +#### 中间结果表：`company_data_verify_log`（第三方数据源验证日志）                                                                                                                                                
+      219 +                                                                                                                                                                                                                  
+      220 +| 字段 | 类型 | 说明 |                                                                                                                                                                                            
+      221 +|------|------|------|                                                                                                                                                                                            
+      222 +| `task_id` | VARCHAR(36) | 关联任务单 |                                                                                                                                                                          
+      223 +| `source_name` | VARCHAR(50) | 数据源名称（tianyancha 等） |                                                                                                                                                     
+      224 +| `query_name` | VARCHAR(100) | 查询企业名称 |                                                                                                                                                                    
+      225 +| `response_data` | JSONB | 数据源返回结果 |                                                                                                                                                                      
+      226 +| `is_consistent` | BOOLEAN | 与输入三要素是否一致 |                                                                                                                                                              
+      227 +| `is_success` | BOOLEAN | API 调用是否成功 |                                                                                                                                                                     
+      228 +| `fail_reason` | VARCHAR(200) | 失败原因 |                                                                                                                                                                       
+      229 +                                                                                                                                                                                                                  
+      230 +#### 中间结果表：`company_conflict_log`（冲突处理日志）                                                                                                                                                           
+      231 +                                                                                                                                                                                                                  
+      232 +| 字段 | 类型 | 说明 |                                                                                                                                                                                            
+      233 +|------|------|------|                                                                                                                                                                                            
+      234 +| `task_id` | VARCHAR(36) | 关联任务单 |                                                                                                                                                                          
+      235 +| `conflict_type` | SMALLINT | 1=同名不同企；2=同企不同名 |                                                                                                                                                       
+      236 +| `new_credit_code` | VARCHAR(18) | 新记录信用代码 |                                                                                                                                                              
+      237 +| `new_name` | VARCHAR(100) | 新记录企业名称 |                                                                                                                                                                    
+      238 +| `existing_ent_code` | VARCHAR(36) | 已有企业 UUID |                                                                                                                                                             
+      239 +| `existing_credit_code` | VARCHAR(18) | 已有信用代码 |                                                                                                                                                           
+      240 +| `existing_name` | VARCHAR(100) | 已有企业名称 |                                                                                                                                                                 
+      241 +| `resolution` | SMALLINT | 1=全部保留独立存在；2=复用UUID挂载新名称；3=拒绝拉新 |                                                                                                                                
+      242 +| `resolution_reason` | VARCHAR(200) | 处理原因 |                                                                                                                                                                 
+      243 +                                                                                                                                                                                                                  
+      244 +#### 中间结果表：`company_first_link_log`（首支验证日志）                                                                                                                                                         
+      245 +                                                                                                                                                                                                                  
+      246 +| 字段 | 类型 | 说明 |                                                                                                                                                                                            
+      247 +|------|------|------|                                                                                                                                                                                            
+      248 +| `task_id` | VARCHAR(36) | 关联任务单 |                                                                                                                                                                          
+      249 +| `fact_id` | BIGINT | 关联 company_fact.id |                                                                                                                                                                     
+      250 +| `verifier_type` | SMALLINT | 1=系统自验（基础/公司拉新）；2=用户确认；3=业务方确认 |                                                                                                                            
+      251 +| `expected_data` | JSONB | 写入前信息（用于比对） |                                                                                                                                                              
+      252 +| `actual_data` | JSONB | 写入后信息 |                                                                                                                                                                            
+      253 +| `is_consistent` | BOOLEAN | 是否一致 |                                                                                                                                                                          
+      254 +| `verify_status` | SMALLINT | 0=待确认；1=已通过；2=已拒绝 |                                                                                                                                                     
+      255 +| `verified_at` | TIMESTAMPTZ | 确认时间 |                                                                                                                                                                        
+      256 +                                                                                                                                                                                                                  
+      257  #### Dapr pub/sub 事件
+      258  
+      259  - **发布 topic**：`company-fact-upserted`
+      176 -- **触发时机**：PostgreSQL 写入成功后                                                                                                                                                                             
+      260 +- **触发时机**：PostgreSQL 事实数据写入成功后                                                                                                                                                                     
+      261  - **Payload**：`{ "ent_code": "...", "fact_id": ..., "action": "create|update" }`
+      262  
+      263  #### 暴露的 Dapr 服务调用方法
+     ...
+      265  | 方法 | 说明 |
+      266  |------|------|
+      267  | `upsert-company-fact` | 写入/更新企业事实数据 |
+      184 -| `query-company-fact` | 按条件查询事实数据 |                                                                                                                                                                     
+      185 -| `create-task` | 创建任务单 |                                                                                                                                                                                    
+      186 -| `update-task-status` | 更新任务单状态 |                                                                                                                                                                         
+      187 -| `query-task` | 查询任务单 |                                                                                                                                                                                     
+      268 +| `batch-upsert-company-fact` | 批量写入企业事实数据（基础拉新用） |                                                                                                                                              
+      269 +| `query-company-fact-by-name` | 按企业名称查询事实数据 |                                                                                                                                                         
+      270 +| `query-company-fact-by-code` | 按信用代码查询事实数据 |                                                                                                                                                         
+      271 +| `query-company-fact-by-ent-code` | 按企业 UUID 查询事实数据 |                                                                                                                                                   
+      272 +| `save-ocr-log` | 保存 OCR 处理日志 |                                                                                                                                                                            
+      273 +| `save-data-verify-log` | 保存第三方数据源验证日志 |                                                                                                                                                             
+      274 +| `save-conflict-log` | 保存冲突处理日志 |                                                                                                                                                                        
+      275 +| `save-first-link-log` | 保存首支验证日志 |                                                                                                                                                                      
+      276  
+      277  ---
+      278  
+     ...
+      285  
+      286  #### ES Index Schema（索引名：`company_name`）
+      287  
+      200 -| 字段 | 类型 | 分词策略 | 用途 |                                                                                                                                                                                 
+      201 -|------|------|---------|------|                                                                                                                                                                                  
+      202 -| `_id` | keyword | — | 企业名称 SHA256 哈希 |                                                                                                                                                                    
+      203 -| `name` | text | ngram 2_3 | 片段模糊搜索 |                                                                                                                                                                      
+      204 -| `name.pinyin` | text | 逐汉字分拼音 | 拼音连续子字符串匹配 |                                                                                                                                                    
+      205 -| `name.char_token` | text | 逐字符 | 过滤搜索词中不存在的字 |                                                                                                                                                    
+      206 -| `name.keyword` | keyword | 不分词 | 精确查询 |                                                                                                                                                                  
+      207 -| `credit_code` | text | edge_ngram 4_18 | 信用代码前缀匹配 |                                                                                                                                                     
+      208 -| `legal_rep` | text | 逐字分词 | 连续子字符串匹配 |                                                                                                                                                              
+      209 -| `legal_rep.pinyin` | text | 逐汉字分拼音 | 权力人拼音匹配 |                                                                                                                                                     
+      210 -| `ent_code` | keyword | 不分词 | UUID 精确查询 |                                                                                                                                                                 
+      211 -| `fact_id` | keyword | 不分词 | 事实 ID 精确查询 |                                                                                                                                                               
+      288 +索引字段与 `company_fact` 表保持一致，额外增加 `name.pinyin` 和 `legal_rep.pinyin` 两个拼音子字段用于搜索：                                                                                                       
+      289  
+      290 +| 字段 | 额外说明（与 DB 一致字段省略） |                                                                                                                                                                         
+      291 +|------|------|                                                                                                                                                                                                   
+      292 +| 与 `company_fact` 表全部字段一一对应 | 类型按 ES 映射规范转换（VARCHAR→keyword/text，TIMESTAMPTZ→date，BOOLEAN→boolean，BIGSERIAL→long，SMALLINT→integer） |                                                    
+      293 +| `name.pinyin` | **新增**，逐汉字分拼音，用于拼音连续子字符串匹配 |                                                                                                                                              
+      294 +| `name.char_token` | **新增**，逐字符分词，用于过滤搜索词中不存在于企业名称的字符 |                                                                                                                              
+      295 +| `name.keyword` | **新增**，不分词，用于精确全名匹配 |                                                                                                                                                           
+      296 +| `legal_rep.pinyin` | **新增**，逐汉字分拼音，用于权力人姓名拼音匹配 |                                                                                                                                           
+      297 +                                                                                                                                                                                                                  
+      298 +> `name` 字段本身使用 ngram 2_3 分词，支持片段模糊搜索；`credit_code` 使用 edge_ngram 4_18，支持前缀匹配。                                                                                                        
+      299 +                                                                                                                                                                                                                  
+      300  #### 暴露的 Dapr 服务调用方法
+      301  
+      302  | 方法 | 说明 |
+      303  |------|------|
+      217 -| `search-company` | 关键词/拼音搜索，返回最多100条 |                                                                                                                                                             
+      304 +| `search-company` | 关键词/拼音搜索，返回最多 100 条 |                                                                                                                                                           
+      305  | `query-company-by-id` | 按 ent_code 或 credit_code 精确查询 |
+      306  
+      307  #### Dapr pub/sub 订阅
+     ...
+      311  
+      312  ---
+      313  
+      227 -### 4.3 eiker-location-db（位置数据·PostgreSQL）                                                                                                                                                                  
+      314 +### 4.3 eiker-address-db（通用地址服务·PostgreSQL）                                                                                                                                                               
+      315  
+      316  - **语言**：Go
+      230 -- **Dapr app-id**：`eiker-location-db`                                                                                                                                                                            
+      231 -- **目录**：`atomic/atomic-go/eiker-location-db/`                                                                                                                                                                 
+      232 -- **职责**：位置预置数据 PostgreSQL CRUD                                                                                                                                                                          
+      317 +- **Dapr app-id**：`eiker-address-db`                                                                                                                                                                             
+      318 +- **目录**：`atomic/atomic-go/eiker-address-db/`                                                                                                                                                                  
+      319 +- **职责**：通用地址数据 PostgreSQL CRUD，不绑定任何业务域，通过 entity_type + entity_id 与任意实体关联                                                                                                           
+      320  
+      234 -#### 核心数据表：`company_location`                                                                                                                                                                               
+      321 +#### 核心数据表：`address_info`                                                                                                                                                                                   
+      322  
+      323  | 字段 | 类型 | 说明 |
+      324  |------|------|------|
+      238 -| `id` | BIGSERIAL | 自增主键 |                                                                                                                                                                                   
+      239 -| `ent_code` | VARCHAR(36) | 企业 UUID（与 company_fact.ent_code 关联） |                                                                                                                                         
+      240 -| `address` | VARCHAR(200) | 原始企业地址 |                                                                                                                                                                       
+      325 +| `address_id` | VARCHAR(36) | 地址 UUID v4（对外标识） |                                                                                                                                                         
+      326 +| `entity_type` | VARCHAR(50) | 关联实体类型（如：company） |                                                                                                                                                     
+      327 +| `entity_id` | VARCHAR(36) | 关联实体 UUID |                                                                                                                                                                     
+      328 +| `raw_address` | VARCHAR(500) | 原始输入地址 |                                                                                                                                                                   
+      329 +| `province_code` | VARCHAR(6) | 省编码（从信用代码提取或地址解析获得） |                                                                                                                                         
+      330  | `longitude` | DECIMAL(10,7) | 经度 |
+      331  | `latitude` | DECIMAL(10,7) | 纬度 |
+      332  | `poi_name` | VARCHAR(200) | 地标名称（位置三要素之一） |
+      333  | `poi_address` | VARCHAR(200) | 地标地址（位置三要素之一） |
+      334  | `poi_id` | VARCHAR(50) | 腾讯地图 POI ID（位置三要素之一） |
+      246 -| `created_at` | TIMESTAMPTZ | 创建时间 |                                                                                                                                                                         
+      335 +| `accuracy_level` | SMALLINT | 准确率级别：1=精确匹配；2=省市县补全后匹配；3=省人民政府兜底 |                                                                                                                    
+      336  
+      337  #### 暴露的 Dapr 服务调用方法
+      338  
+      339  | 方法 | 说明 |
+      340  |------|------|
+      252 -| `upsert-location` | 写入/更新位置数据 |                                                                                                                                                                         
+      253 -| `query-location` | 按 ent_code 查询位置 |                                                                                                                                                                       
+      341 +| `upsert-address` | 写入/更新地址 |                                                                                                                                                                              
+      342 +| `query-address-by-id` | 按 address_id 查询 |                                                                                                                                                                    
+      343 +| `query-address-by-entity` | 按 entity_type + entity_id 查询 |                                                                                                                                                   
+      344  
+      345  ---
+      346  
+     ...
+      351  - **语言**：Go
+      352  - **Dapr app-id**：`eiker-third-tianyancha`
+      353  - **目录**：`atomic/atomic-go/eiker-third-api/eiker-third-tianyancha/`
+      354 +- **说明**：天眼查仅提供按企业名称查询企业列表一个查询接口，验实逻辑由 business 层比对完成                                                                                                                        
+      355  
+      356  | 方法 | 说明 |
+      357  |------|------|
+      267 -| `verify-company-triple` | 按信用代码查询天眼查返回企业三要素，与输入比对 |                                                                                                                                      
+      268 -| `query-company-by-code` | 按信用代码查询企业信息（第三方数据源） |                                                                                                                                              
+      358 +| `query-companies-by-name` | 按企业名称调用天眼查 API 查询企业列表，返回原始结果 |                                                                                                                               
+      359  
+      360  #### 4.4.2 eiker-third-tencent
+      361  
+     ...
+      368  | `geocode-address` | 腾讯地图地址解析（地址 → 坐标） |
+      369  | `reverse-geocode` | 腾讯地图逆地址解析（坐标 → POI 列表） |
+      370  | `search-poi-by-keyword` | 腾讯地图关键词搜索（关键词 → POI） |
+      371 +| `verify-user-two-elements` | 用户二要素认证（姓名 + 手机号码） |                                                                                                                                                
+      372 +| `verify-user-three-elements` | 用户三要素认证（姓名 + 手机号码 + 身份证号） |                                                                                                                                   
+      373 +| `verify-user-three-elements-liveness` | 用户三要素认证 + 活体认证（姓名 + 手机号码 + 身份证号 + 活体） |                                                                                                        
+      374  
+      375  #### 4.4.3 eiker-third-identity（待定）
+      376  
+      377  - **语言**：Go
+      378  - **Dapr app-id**：`eiker-third-identity`
+      379  - **目录**：`atomic/atomic-go/eiker-third-api/eiker-third-identity/`
+      287 -- **说明**：五要素认证提供方在需求文档中未定义（见缺口 G-20），此处预留模块占位，具体对接方在提供方确认后实现                                                                                                     
+      380 +- **说明**：五要素认证（企业名称+信用代码+权力人+手机号+身份证号）提供方待确定（见缺口 G-20），预留占位                                                                                                           
+      381  
+      382  | 方法 | 说明 |
+      383  |------|------|
+     ...
+      389  
+      390  每个子模块均通过 Dapr gRPC service invocation 暴露统一方法：`extract-company-triple`
+      391  
+      299 -输入：图片 base64 / 图片文件路径                                                                                                                                                                                  
+      300 -输出：`{ "credit_code": "...", "name": "...", "legal_rep": "..." }`                                                                                                                                               
+      392 +- **输入**：图片 base64 或图片文件路径                                                                                                                                                                            
+      393 +- **输出**：`{ "credit_code": "...", "name": "...", "legal_rep": "..." }`                                                                                                                                         
+      394  
+      395  | 子模块 | 语言 | 目录 | 框架 | 特点 |
+      396  |--------|------|------|------|------|
+      304 -| `eiker-ocr-paddleocr` | Python | `atomic/atomic-python/eiker-ocr/eiker-ocr-paddleocr/` | PaddleOCR | 中文识别优先，百度开源 |                                                                                   
+      397 +| `eiker-ocr-paddleocr` | Python | `atomic/atomic-python/eiker-ocr/eiker-ocr-paddleocr/` | PaddleOCR | 中文识别优先，百度开源，推荐主模型 |                                                                       
+      398  | `eiker-ocr-easyocr` | Python | `atomic/atomic-python/eiker-ocr/eiker-ocr-easyocr/` | EasyOCR | 多语言备选 |
+      399  | `eiker-ocr-tesseract` | Python | `atomic/atomic-python/eiker-ocr/eiker-ocr-tesseract/` | pytesseract | 经典引擎，轻量备选 |
+      400  
+      308 -**双模型比对策略**（在 business 层实现）：同时调用2个模型，三要素完全一致则通过，否则返回识别失败。                                                                                                               
+      401 +**双模型比对策略**（在 business 层 eiker-company-update / eiker-company-service 内实现）：同时调用两个模型，三要素完全一致则通过，不一致则返回识别失败，由 business 层处理重试或人工介入。                        
+      402  
+      403  ---
+      404  
+     ...
+      406  
+      407  每个子模块通过 Dapr service invocation 暴露统一方法：`parse-file`
+      408  
+      316 -输入：文件 base64 + 文件类型标识                                                                                                                                                                                  
+      317 -输出：`{ "rows": [ { "credit_code": "...", "name": "...", "legal_rep": "..." }, ... ] }`                                                                                                                          
+      409 +- **输入**：文件 base64 + 文件类型标识                                                                                                                                                                            
+      410 +- **输出**：`{ "rows": [ { "credit_code": "...", "name": "...", "legal_rep": "..." }, ... ] }`                                                                                                                    
+      411  
+      412  | 子模块 | 语言 | 目录 | 框架 | 支持格式 |
+      413  |--------|------|------|------|---------|
+      321 -| `eiker-file-excelize` | Go | `atomic/atomic-go/eiker-file-go/eiker-file-excelize/` | excelize | xlsx/xls |                                                                                                      
+      414 +| `eiker-file-excelize` | Go | `atomic/atomic-go/eiker-file-go/eiker-file-excelize/` | excelize | xlsx |                                                                                                          
+      415  | `eiker-file-apache-poi` | Java | `atomic/atomic-java/eiker-file-java/eiker-file-apache-poi/` | Apache POI | xls/xlsx/csv |
+      416  | `eiker-file-openpyxl` | Python | `atomic/atomic-python/eiker-file-python/eiker-file-openpyxl/` | openpyxl | xlsx |
+      417  | `eiker-file-pandas` | Python | `atomic/atomic-python/eiker-file-python/eiker-file-pandas/` | pandas | csv/xlsx/json |
+      418  
+      326 -> 同一文件格式提供多语言实现，business 层根据实际部署环境选择调用哪个子模块。                                                                                                                                     
+      419 +> 同一格式提供多语言实现，business 层根据实际部署环境选择调用哪个子模块。现有 `eiker-file-go` 根目录代码迁移至 `eiker-file-excelize` 子模块。                                                                     
+      420  
+      421  ---
+      422  
+     ...
+      426  前端
+      427    ↓
+      428  eiker-company-service (business·Go)
+      336 -  ├─ invoke → eiker-company-es       搜索/查询                                                                                                                                                                    
+      337 -  ├─ invoke → eiker-company-db       申诉/主张写入                                                                                                                                                                
+      338 -  ├─ invoke → eiker-ocr-paddleocr    OCR（主）                                                                                                                                                                    
+      339 -  ├─ invoke → eiker-ocr-easyocr      OCR（备）                                                                                                                                                                    
+      340 -  └─ invoke → eiker-third-tianyancha 天眼查验实                                                                                                                                                                   
+      429 +  ├─ invoke → eiker-company-es            搜索/查询                                                                                                                                                               
+      430 +  ├─ invoke → eiker-company-db            申诉/主张写入、日志写入                                                                                                                                                 
+      431 +  ├─ invoke → eiker-ocr-paddleocr         OCR（主）                                                                                                                                                               
+      432 +  ├─ invoke → eiker-ocr-easyocr           OCR（备）                                                                                                                                                               
+      433 +  ├─ invoke → eiker-third-tianyancha      天眼查查询                                                                                                                                                              
+      434 +  └─ invoke → eiker-third-identity        五要素认证                                                                                                                                                              
+      435  
+      436  eiker-company-update (business·Go)
+      343 -  ├─ invoke → eiker-company-db       任务单管理、事实数据写入                                                                                                                                                     
+      437 +  ├─ invoke → eiker-company-db            任务单管理、事实数据写入、日志写入                                                                                                                                      
+      438    ├─ invoke → eiker-ocr-paddleocr / eiker-ocr-easyocr
+      439    ├─ invoke → eiker-third-tianyancha
+      346 -  ├─ invoke → eiker-file-excelize / eiker-file-pandas  文件解析                                                                                                                                                   
+      347 -  └─ invoke → eiker-location-update  触发位置预置                                                                                                                                                                 
+      440 +  ├─ invoke → eiker-file-excelize / eiker-file-apache-poi / eiker-file-pandas                                                                                                                                     
+      441 +  └─ invoke → eiker-location-update (business)  触发位置预置                                                                                                                                                      
+      442  
+      443  eiker-location-update (business·Go)
+      350 -  ├─ invoke → eiker-location-db                                                                                                                                                                                   
+      351 -  └─ invoke → eiker-third-tencent    腾讯地图三类API                                                                                                                                                              
+      444 +  ├─ invoke → eiker-address-db            地址数据写入/查询                                                                                                                                                       
+      445 +  └─ invoke → eiker-third-tencent         腾讯地图三类 API                                                                                                                                                        
+      446  
+      447 +eiker-location-service (business·Go)                                                                                                                                                                              
+      448 +  └─ invoke → eiker-address-db            地址数据查询                                                                                                                                                            
+      449 +                                                                                                                                                                                                                  
+      450  eiker-company-db (atomic·Go)
+      451    └─ pub/sub publish → topic: company-fact-upserted
+      452  
+     ...
+      458  
+      459  ## 6. eiker-java-common 变更
+      460  
+      364 -**无需新增依赖。** Business 层使用 Go 实现 Dapr Workflow，与 Java common 库无关。                                                                                                                                 
+      461 +**无需新增依赖。** Business 层与 Atomic 文件解析 Java 服务均通过 Dapr service invocation 通信，business 层使用 Go 实现 Dapr Workflow，与 Java common 库无关。                                                     
+      462  
+      463  ---
+      464  
+     ...
+      476  │   ├── atomic-go/
+      477  │   │   ├── eiker-company-db/
+      478  │   │   ├── eiker-company-es/
+      382 -│   │   ├── eiker-location-db/                                                                                                                                                                                    
+      479 +│   │   ├── eiker-address-db/                                                                                                                                                                                     
+      480  │   │   ├── eiker-file-go/
+      384 -│   │   │   └── eiker-file-excelize/   ← 现有 eiker-file-go 代码迁入                                                                                                                                              
+      481 +│   │   │   └── eiker-file-excelize/      ← 现有 eiker-file-go 代码迁入                                                                                                                                           
+      482  │   │   └── eiker-third-api/
+      483  │   │       ├── eiker-third-tianyancha/
+      484  │   │       ├── eiker-third-tencent/
+      388 -│   │       └── eiker-third-identity/   ← 五要素认证（提供方待定）                                                                                                                                                
+      485 +│   │       └── eiker-third-identity/     ← 五要素认证（提供方待定）                                                                                                                                              
+      486  │   ├── atomic-java/
+      487  │   │   └── eiker-file-java/
+      488  │   │       └── eiker-file-apache-poi/
+     ...
+      502  
+      503  ---
+      504  
+      408 -## 8. 待决策事项（来自需求分析报告矛盾/缺口）                                                                                                                                                                     
+      505 +## 8. 已决策事项                                                                                                                                                                                                  
+      506  
+      410 -| 编号 | 问题 | 建议 |                                                                                                                                                                                            
+      507 +| 编号 | 问题 | 决策 |                                                                                                                                                                                            
+      508  |------|------|------|
+      412 -| C-03 | 同名不同企：随机留一 vs 全部保留 | 以会议记录为准：全部保留，独立存在 |                                                                                                                                  
+      413 -| C-07 | 权力人申诉校验逻辑相反 | 以流程图为准：OCR ≠ 库时申诉有依据 |                                                                                                                                            
+      414 -| G-06 | 公司拉新：非结构化文本解析方式 | 建议采用 AI 抽取（如调用 LLM 结构化提取） |                                                                                                                             
+      415 -| G-10 | 首支验证自动化机制 | 首期保留手动确认，生产环境另行定义 |                                                                                                                                                
+      416 -| G-18/19 | 双模型/双数据源结果不一致时策略 | 首期返回失败，由 business 层处理重试或人工介入 |                                                                                                                    
+      509 +| **C-03** | 同名不同企处理 | 以《企业名称服务.pdf》流程图为准（图中存在"重复数据人工处理"分支，即全部保留，通过冲突处理流程解决，记录至 company_conflict_log） |                                                 
+      510 +| **C-07** | 权力人申诉校验逻辑 | 以流程图逻辑为准：OCR ≠ 库中数据时，申诉有依据，继续处理；OCR = 库中数据时，申诉失败 |                                                                                          
+      511 +| **G-06** | 公司拉新输入形式 | 与基础拉新一致，输入为结构化文件（sql/csv/xlsx/json） |                                                                                                                           
+      512 +| **G-10** | 首支验证自动化 | 首期保留手动确认，生产环境另行定义 |                                                                                                                                                
+      513 +| **G-18/19** | 双模型/双数据源不一致时策略 | 首期返回失败，由 business 层处理重试或人工介入 |                                                                                                                    
+      514 +| **eiker-third-identity** | 五要素认证提供方 | 暂无指定供应商，预留占位模块 |                                                                                                                                    
+
+● 规格自检完成，无新问题。文档已全面更新，主要修正点：
+
+  1. 3.2 依赖表新增"层级"列，eiker-location-update 标注为 business 层
+  2. 4.1 eiker-company-db 完整重写：公共字段规范、4张中间结果表（OCR日志/数据验证日志/冲突日志/首支验证日志）、company_fact 增加 location_id、任务单相关 Dapr 方法已从公开接口移除
+  3. 4.2 eiker-company-es 简化为 company_fact 字段镜像 + name.pinyin + legal_rep.pinyin
+  4. 4.3 重命名为 eiker-address-db，升级为通用地址服务，表名改为 address_info，增加 entity_type/entity_id 泛化关联
+  5. 4.4.1 eiker-third-tianyancha 精简为单一 API：query-companies-by-name
+  6. 4.4.2 eiker-third-tencent 新增三个用户认证方法（二要素/三要素/三要素+活体）
+  7. G-06 公司拉新与基础拉新输入一致（结构化文件）
+
+  ---
+  文档已保存至 docs/superpowers/specs/2026-05-12-company-name-service-design.md。
+
+  请审阅，如无问题，进入实现计划编写阶段。
+
+✻ Crunched for 7m 7s
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯  
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ accept edits on (shift+tab to cycle)
+
+   
